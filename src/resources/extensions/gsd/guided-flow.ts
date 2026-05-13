@@ -71,7 +71,6 @@ import {
 import { verifyExpectedArtifact } from "./auto-recovery.js";
 import { createWorkspace, scopeMilestone, type MilestoneScope } from "./workspace.js";
 import { getPendingGate, extractDepthVerificationMilestoneId } from "./bootstrap/write-gate.js";
-import { readManifest } from "./workflow-manifest.js";
 
 export function shouldSkipGitBootstrapAfterInit(result: { gitEnabled?: boolean }): boolean {
   return result.gitEnabled === false;
@@ -89,6 +88,7 @@ export {
   buildExistingMilestonesContext,
 } from "./guided-flow-queue.js";
 import { logWarning } from "./workflow-logger.js";
+import { readManifest } from "./workflow-manifest.js";
 import { deleteRuntimeKv } from "./db/runtime-kv.js";
 import { PAUSED_SESSION_KV_KEY } from "./interrupted-session.js";
 import { buildWorkflowDispatchContent } from "./workflow-protocol.js";
