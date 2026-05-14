@@ -337,7 +337,7 @@ export function runVerificationGate(options: RunVerificationGateOptions): Verifi
     const shellBin = process.platform === "win32" ? "cmd" : "sh";
     const shellArgs = process.platform === "win32"
       ? ["/c", rewrittenCommand]
-      : ["-c", `set -o pipefail 2>/dev/null && ${rewrittenCommand}`];
+      : ["-c", `set -o pipefail 2>/dev/null; ${rewrittenCommand}`];
     const result: SpawnSyncReturns<string> = spawnSync(shellBin, shellArgs, {
       cwd: options.cwd,
       stdio: "pipe",
