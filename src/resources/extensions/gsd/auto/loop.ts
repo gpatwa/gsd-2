@@ -862,6 +862,7 @@ export async function autoLoop(
             break;
           }
           if (preDispatchResult.action === "continue") {
+            completeIteration();
             finishTurn("skipped");
             continue;
           }
@@ -879,6 +880,7 @@ export async function autoLoop(
             break;
           }
           if (dispatchResult.action === "continue") {
+            completeIteration();
             finishTurn("skipped");
             continue;
           }
