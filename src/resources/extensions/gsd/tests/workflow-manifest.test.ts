@@ -195,6 +195,23 @@ test('workflow-manifest: bootstrapFromManifest preserves target_repositories', (
   }
 });
 
+test('workflow-manifest: insertTask can clear target_repositories with explicit empty array', () => {
+  const base = tempDir();
+  openDatabase(tempDbPath(base));
+  try {
+    insertMilestone({ id: 'M001', title: 'Milestone' });
+    insertSlice({ id: 'S01', milestoneId: 'M001', title: 'Slice' });
+    insertTask({ id: 'T01', sliceId: 'S01', milestoneId: 'M001', planning: { targetRepositories: ['frontend'] } });
+    insertTask({ id: 'T01', sliceId: 'S01', milestoneId: 'M001', planning: { targetRepositories: [] } });
+
+    const snap = snapshotState();
+    assert.deepStrictEqual(snap.tasks.find((r) => r.id === 'T01')?.target_repositories, []);
+  } finally {
+    closeDatabase();
+    cleanupDir(base);
+  }
+});
+
 // ─── snapshotState: numeric column coercion (#2962) ─────────────────────
 
 test('workflow-manifest: snapshotState coerces string placeholders in numeric columns to null (#2962)', () => {

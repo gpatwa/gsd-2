@@ -26,11 +26,14 @@ test("repository registry includes implicit project root and declared child repo
 
   assert.equal(registry.mode, "parent");
   assert.equal(registry.projectRoot, base);
+  assert.equal(registry.byId.size, 3);
   assert.equal(registry.byId.get("project")?.root, base);
   assert.equal(registry.byId.get("frontend")?.root, join(base, "frontend"));
   assert.equal(registry.byId.get("backend")?.root, join(base, "backend"));
   assert.deepEqual(registry.byId.get("frontend")?.verification, ["npm test"]);
+  assert.equal(registry.byId.get("frontend")?.role, "web UI");
   assert.equal(registry.byId.get("backend")?.commitPolicy, "skip");
+  assert.equal(registry.byId.get("backend")?.role, "API");
 });
 
 test("repository registry rejects repositories outside project root", (t) => {
