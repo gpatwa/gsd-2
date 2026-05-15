@@ -12,6 +12,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AutoSession } from "./session.js";
 import type { LoopDeps } from "./loop-deps.js";
 import {
@@ -80,6 +82,7 @@ import { createWorkflowTurnReporter } from "./workflow-turn-reporter.js";
 import { validateWorkflowSessionLock } from "./workflow-session-lock.js";
 import { dequeueSidecarItem } from "./workflow-sidecar-queue.js";
 import { maintainWorkerHeartbeat } from "./workflow-worker-heartbeat.js";
+import { gsdRoot } from "../paths.js";
 import {
   measureMemoryPressure,
   shouldCheckMemoryPressure,
@@ -216,6 +219,39 @@ const MAX_CUSTOM_ENGINE_VERIFY_RETRIES = 3;
 
 interface AutoLoopOptions {
   dispatchContract?: DispatchContract;
+}
+
+type CrashErrorType = "infrastructure" | "cooldown-exhausted" | "iteration-exhausted";
+
+function persistCrashNote(
+  s: AutoSession,
+  errorType: CrashErrorType,
+  errorMessage: string,
+  observedUnitType?: string,
+  observedUnitId?: string,
+): string | null {
+  try {
+    const activityDir = join(gsdRoot(s.basePath), "activity");
+    mkdirSync(activityDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `${timestamp}-auto-crash-note.json`;
+    const notePath = join(activityDir, filename);
+    const payload = {
+      kind: "auto_crash_note",
+      createdAt: new Date().toISOString(),
+      errorType,
+      errorMessage,
+      workerId: s.workerId ?? null,
+      milestoneId: s.currentMilestoneId ?? null,
+      unitType: observedUnitType ?? s.currentUnit?.type ?? null,
+      unitId: observedUnitId ?? s.currentUnit?.id ?? null,
+      sessionFile: s.pausedSessionFile ?? null,
+    };
+    writeFileSync(notePath, JSON.stringify(payload, null, 2), "utf-8");
+    return notePath;
+  } catch {
+    return null;
+  }
 }
 
 async function enforceMinRequestInterval(s: AutoSession, prefs: IterationContext["prefs"]): Promise<void> {
@@ -1081,13 +1117,17 @@ export async function autoLoop(
           code: infraCode,
           errorMessage: msg,
         });
+        const crashNotePath = persistCrashNote(s, "infrastructure", msg, observedUnitType, observedUnitId);
         debugLog("autoLoop", {
           phase: "infrastructure-error",
           iteration,
           code: infraCode,
           error: msg,
         });
-        ctx.ui.notify(infraDecision.notifyMessage, "error");
+        ctx.ui.notify(
+          `${infraDecision.notifyMessage}${crashNotePath ? ` Crash note: ${crashNotePath}` : ""} Run /gsd auto to resume from the last checkpoint.`,
+          "error",
+        );
         await deps.stopAuto(ctx, pi, infraDecision.stopMessage);
         finishTurn(infraDecision.turnStatus, infraDecision.failureClass, msg);
         break;
@@ -1117,7 +1157,11 @@ export async function autoLoop(
         });
 
         if (cooldownDecision.action === "stop") {
-          ctx.ui.notify(cooldownDecision.notifyMessage, "error");
+          const crashNotePath = persistCrashNote(s, "cooldown-exhausted", msg, observedUnitType, observedUnitId);
+          ctx.ui.notify(
+            `${cooldownDecision.notifyMessage}${crashNotePath ? ` Crash note: ${crashNotePath}` : ""} Run /gsd auto to resume from the last checkpoint.`,
+            "error",
+          );
           finishTurn("stopped", "timeout", msg);
           await deps.stopAuto(ctx, pi, cooldownDecision.stopMessage);
           break;
@@ -1144,7 +1188,11 @@ export async function autoLoop(
         currentErrorMessage: msg,
       });
       if (errorDecision.action === "stop") {
-        ctx.ui.notify(errorDecision.notifyMessage, "error");
+        const crashNotePath = persistCrashNote(s, "iteration-exhausted", msg, observedUnitType, observedUnitId);
+        ctx.ui.notify(
+          `${errorDecision.notifyMessage}${crashNotePath ? ` Crash note: ${crashNotePath}` : ""} Run /gsd auto to resume from the last checkpoint.`,
+          "error",
+        );
         await deps.stopAuto(ctx, pi, errorDecision.stopMessage);
         finishTurn(errorDecision.turnStatus, "execution", msg);
         break;
