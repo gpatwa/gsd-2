@@ -317,7 +317,7 @@ async function applyDisabledModelProviderPolicy(ctx: ExtensionContext): Promise<
 /**
  * Bridge `context_management.compaction_threshold_percent` from GSD preferences
  * into the agent's runtime compaction settings (#5475). The preference is
- * validated to (0.5, 0.95) at load time, but defense-in-depth normalization
+ * validated to [0.5, 0.95] at load time, but defense-in-depth normalization
  * here protects against a stale or hand-edited prefs file. Calling with
  * `undefined` clears any prior override so a removed preference does not leak.
  */
@@ -327,7 +327,7 @@ async function applyCompactionThresholdOverride(ctx: ExtensionContext): Promise<
     const prefs = loadEffectiveGSDPreferences();
     const raw = prefs?.preferences.context_management?.compaction_threshold_percent;
     const value =
-      typeof raw === "number" && Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.6;
+      typeof raw === "number" && Number.isFinite(raw) && raw >= 0.5 && raw <= 0.95 ? raw : 0.6;
     ctx.setCompactionThresholdOverride(value);
   } catch {
     // Non-fatal: use conservative default when preferences cannot be loaded.

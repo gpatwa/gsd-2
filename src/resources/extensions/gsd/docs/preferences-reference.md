@@ -186,6 +186,7 @@ Setting `prefer_skills: []` does **not** disable skill discovery — it just mea
   - `on_budget`: boolean — notify when budget thresholds are reached. Default: `true`.
   - `on_milestone`: boolean — notify when a milestone finishes. Default: `true`.
   - `on_attention`: boolean — notify when manual attention is needed. Default: `true`.
+  - Terminal auto-loop errors persist an `activity/*-auto-crash-note.json` file with error/session metadata; when available, the error notification includes the crash-note path and instructs resuming with `/gsd auto`.
 
 - `cmux`: configures cmux terminal integration when GSD is running inside a cmux workspace. Keys:
   - `enabled`: boolean — master toggle for cmux integration. Default: `false`.
