@@ -32,6 +32,13 @@ describe('normalizeFilePath backtick stripping (#3649)', () => {
     )
   })
 
+  it('strips dash-style annotation text inside a single backtick pair (#5566)', () => {
+    assert.equal(
+      normalizeFilePath('`src/foo.ts — current state`'),
+      'src/foo.ts',
+    )
+  })
+
   it('strips stray backticks from dash-annotated bare paths (#4550)', () => {
     assert.equal(
       normalizeFilePath('.gsd/KNOWLEDGE.md` — append-only S05 lessons section'),
