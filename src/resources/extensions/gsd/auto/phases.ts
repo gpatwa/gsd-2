@@ -171,14 +171,36 @@ function formatWorktreeSafetyStopReason(result: Extract<WorktreeSafetyResult, { 
   return `Worktree Safety failed (${result.kind}).`;
 }
 
+type BlockerKind = "needs-remediation-dead-end" | "other";
+
+function classifyBlocker(blocker: string): BlockerKind {
+  const normalized = blocker.toLowerCase();
+  if (normalized.includes("needs-remediation") && normalized.includes("all slices are complete")) {
+    return "needs-remediation-dead-end";
+  }
+  return "other";
+}
+
+function sanitizeBlockerForUser(blocker: string): string {
+  return blocker.replaceAll("gsd_reassess_roadmap", "/gsd dispatch reassess");
+}
+
+/**
+ * Formats blocked resume guidance for users, ensuring internal tool names are
+ * never surfaced in notification text.
+ */
 function formatBlockedResumeMessage(blockers: string[]): string {
-  const hasNeedsRemediationDeadEnd = blockers.some((blocker) =>
-    blocker.includes("needs-remediation") && blocker.includes("all slices are complete")
+  const classifiedBlockers = blockers.map((blocker) => ({
+    blocker: sanitizeBlockerForUser(blocker),
+    kind: classifyBlocker(blocker),
+  }));
+  const hasNeedsRemediationDeadEnd = classifiedBlockers.some(
+    (classifiedBlocker) => classifiedBlocker.kind === "needs-remediation-dead-end"
   );
   if (hasNeedsRemediationDeadEnd) {
     return "Blocked: milestone validation requires remediation but all slices are complete. Run /gsd dispatch reassess to add remediation slices, then /gsd auto to continue.";
   }
-  return `Blocked: ${blockers.join(", ")}. Fix and run /gsd auto to resume.`;
+  return `Blocked: ${classifiedBlockers.map((classifiedBlocker) => classifiedBlocker.blocker).join(", ")}. Fix and run /gsd auto to resume.`;
 }
 
 function resolveEmptyWorktreeWithProjectContent(
