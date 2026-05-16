@@ -224,8 +224,41 @@ export function formatFailureContext(result: VerificationResult): string {
 
 // ─── Gate Execution ─────────────────────────────────────────────────────────
 
-/** Characters that indicate shell injection when found in a command string. */
-const SHELL_INJECTION_PATTERN = /[;|`<>]|\$\(/;
+/** Characters that indicate shell control syntax when unquoted in a command string. */
+const UNQUOTED_SHELL_CONTROL_CHARS = new Set([";", "|", "<", ">"]);
+
+function hasUnsafeShellSyntax(cmd: string): boolean {
+  // Command substitution remains unsafe even when quoted with double quotes.
+  if (cmd.includes("$(") || cmd.includes("`")) return true;
+
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  for (const ch of cmd) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+    if (ch === "\"" && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+    if (!inSingle && !inDouble && UNQUOTED_SHELL_CONTROL_CHARS.has(ch)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Known executable first-tokens that are safe to run.
@@ -233,6 +266,7 @@ const SHELL_INJECTION_PATTERN = /[;|`<>]|\$\(/;
  */
 const KNOWN_COMMAND_PREFIXES = new Set([
   "npm", "npx", "yarn", "pnpm", "bun", "bunx", "deno",
+  "uv",
   "node", "ts-node", "tsx", "tsc",
   "sh", "bash", "zsh",
   "echo", "cat", "ls", "test", "true", "false", "pwd", "env",
@@ -301,7 +335,7 @@ export function isLikelyCommand(cmd: string): boolean {
  * Returns the command unchanged if safe, or null if suspicious.
  */
 export function validateVerificationCommand(cmd: string): { ok: true } | { ok: false; reason: string } {
-  if (SHELL_INJECTION_PATTERN.test(cmd)) {
+  if (hasUnsafeShellSyntax(cmd)) {
     return { ok: false, reason: "contains shell control syntax such as pipes, redirects, semicolons, backticks, or command substitution" };
   }
   if (!isLikelyCommand(cmd)) {
