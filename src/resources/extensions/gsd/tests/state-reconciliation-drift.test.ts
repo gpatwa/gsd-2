@@ -1014,6 +1014,19 @@ test("ADR-017 (#5707): reconcileBeforeSpawn reports repaired drift in ok=true re
   }
 });
 
+test("ADR-017 (#6238): reconcileBeforeSpawn does not pass reconcile-only deps object", async () => {
+  let receivedDeps: ReconciliationDeps | undefined;
+  const result = await reconcileBeforeSpawn("/project", {
+    reconcile: async (_basePath, deps) => {
+      receivedDeps = deps;
+      return { ok: true, stateSnapshot: makeState(), repaired: [], blockers: [] };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(receivedDeps, undefined);
+});
+
 // ─── Lifecycle and classification ────────────────────────────────────────────
 
 test("ADR-017 (#5700): cascading drift triggers second pass within cap", async () => {
