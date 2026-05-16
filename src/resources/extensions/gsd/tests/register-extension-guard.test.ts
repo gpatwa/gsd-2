@@ -48,6 +48,28 @@ test("handleRecoverableExtensionProcessError swallows uv_cwd ENOENT", () => {
   }
 });
 
+test("handleRecoverableExtensionProcessError swallows EIO", () => {
+	let stderr = "";
+	const originalWrite = process.stderr.write.bind(process.stderr);
+	process.stderr.write = ((chunk: string | Uint8Array) => {
+		stderr += String(chunk);
+		return true;
+	}) as typeof process.stderr.write;
+
+	try {
+		const handled = handleRecoverableExtensionProcessError(
+			Object.assign(new Error("read EIO"), {
+				code: "EIO",
+				syscall: "read",
+			}),
+		);
+		assert.equal(handled, true);
+		assert.match(stderr, /\[gsd\] EIO: read EIO/);
+	} finally {
+		process.stderr.write = originalWrite;
+	}
+});
+
 test("handleRecoverableExtensionProcessError leaves unrelated errors unhandled", () => {
   const handled = handleRecoverableExtensionProcessError(
     Object.assign(new Error("permission denied"), {
