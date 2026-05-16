@@ -428,7 +428,11 @@ export function listWorktrees(basePath: string): WorktreeInfo[] {
     });
   }
 
-  const registeredBranches = new Set(worktrees.map((wt) => wt.branch));
+  const registeredBranches = new Set(
+    entries
+      .filter(entry => !entry.isBare && !!entry.branch)
+      .map(entry => entry.branch as string),
+  );
   const orphanMilestoneBranches = nativeBranchList(basePath, "milestone/*")
     .filter(branch => !registeredBranches.has(branch));
 
