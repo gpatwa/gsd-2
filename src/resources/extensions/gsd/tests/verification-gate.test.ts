@@ -633,6 +633,14 @@ test("validateVerificationCommand allows semicolons inside quoted python -c code
   assert.equal(result.ok, true);
 });
 
+test("validateVerificationCommand rejects shell operators after single-quote backslash desync patterns", () => {
+  const result = validateVerificationCommand("echo 'x\\'; ls");
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.match(result.reason, /shell control syntax/);
+  }
+});
+
 // ─── Additional Preference Validation Tests (T02) ──────────────────────────
 
 test("verification-gate: verification_commands produces no unknown-key warnings", () => {

@@ -227,6 +227,7 @@ export function formatFailureContext(result: VerificationResult): string {
 /** Characters that indicate shell control syntax when unquoted in a command string. */
 const UNQUOTED_SHELL_CONTROL_CHARS = new Set([";", "|", "<", ">"]);
 
+/** Returns true when command text contains unquoted shell control syntax. */
 function hasUnsafeShellSyntax(cmd: string): boolean {
   // Command substitution remains unsafe even when quoted with double quotes.
   if (cmd.includes("$(") || cmd.includes("`")) return true;
@@ -240,7 +241,7 @@ function hasUnsafeShellSyntax(cmd: string): boolean {
       escaped = false;
       continue;
     }
-    if (ch === "\\") {
+    if (ch === "\\" && !inSingle) {
       escaped = true;
       continue;
     }
