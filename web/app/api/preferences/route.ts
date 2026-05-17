@@ -11,19 +11,38 @@ interface WebPreferences {
   lastActiveProject?: string;
 }
 
+/**
+ * Shape returned by GET. `launchCwd` is the CWD the user launched `gsd --web`
+ * from, propagated by the CLI via `GSD_WEB_PROJECT_CWD`. The client uses it
+ * to auto-select the launch project instead of falling back to
+ * `lastActiveProject` (or alphabetically first). See issue #6344.
+ */
+interface WebPreferencesResponse extends WebPreferences {
+  launchCwd: string | null;
+}
+
+function readLaunchCwd(): string | null {
+  const v = process.env.GSD_WEB_PROJECT_CWD;
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
 // ─── GET: read current preferences ─────────────────────────────────────────
 
 export async function GET(): Promise<Response> {
+  const launchCwd = readLaunchCwd();
   try {
     if (!existsSync(webPreferencesPath)) {
-      return Response.json({});
+      const body: WebPreferencesResponse = { launchCwd };
+      return Response.json(body);
     }
     const raw = readFileSync(webPreferencesPath, "utf-8");
     const prefs: WebPreferences = JSON.parse(raw);
-    return Response.json(prefs);
+    const body: WebPreferencesResponse = { ...prefs, launchCwd };
+    return Response.json(body);
   } catch {
-    // File corrupt or unreadable — return empty
-    return Response.json({});
+    // File corrupt or unreadable — return empty (but still surface launchCwd)
+    const body: WebPreferencesResponse = { launchCwd };
+    return Response.json(body);
   }
 }
 

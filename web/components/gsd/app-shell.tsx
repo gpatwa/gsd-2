@@ -29,7 +29,7 @@ import { ScopeBadge } from "@/components/gsd/scope-badge"
 import { Badge } from "@/components/ui/badge"
 import { ProjectsPanel, ProjectSelectionGate } from "@/components/gsd/projects-view"
 import { UpdateBanner } from "@/components/gsd/update-banner"
-import { getAuthToken } from "@/lib/auth"
+import { getAuthToken, authFetch } from "@/lib/auth"
 
 const KNOWN_VIEWS = new Set(["dashboard", "power", "chat", "roadmap", "files", "activity", "visualize"])
 
@@ -591,6 +591,31 @@ function ProjectAwareWorkspace() {
   const manager = useProjectStoreManager()
   const activeProjectCwd = useSyncExternalStore(manager.subscribe, manager.getSnapshot, manager.getSnapshot)
   const activeStore = activeProjectCwd ? manager.getActiveStore() : null
+
+  // #6344 — when `gsd --web` was launched from a project directory the CLI
+  // propagates that path via GSD_WEB_PROJECT_CWD. The preferences endpoint
+  // surfaces it as `launchCwd`; auto-select that project once on first mount
+  // so the launch CWD wins over `lastActiveProject` / alphabetic fallback.
+  useEffect(() => {
+    if (manager.getActiveProjectCwd()) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await authFetch("/api/preferences")
+        if (!res.ok) return
+        const prefs = (await res.json()) as { launchCwd?: string | null }
+        if (cancelled) return
+        if (prefs.launchCwd && !manager.getActiveProjectCwd()) {
+          manager.switchProject(prefs.launchCwd)
+        }
+      } catch {
+        // Ignore — user can still pick from the gate.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [manager])
 
   // Shut down all projects when the tab actually closes.
   // IMPORTANT: pagehide fires both on real page unload AND on mobile/Safari
