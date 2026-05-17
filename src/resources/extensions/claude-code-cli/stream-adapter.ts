@@ -1815,19 +1815,22 @@ async function pumpSdkMessages(
 
 					if (!builder) break;
 
-					const assistantEvent = builder.handleEvent(event);
-					if (assistantEvent) {
-						stream.push(assistantEvent);
-						if (assistantEvent.type === "toolcall_start" && assistantEvent.toolCall) {
-							try {
-								await onExternalToolCall?.(assistantEvent.toolCall);
-							} catch (error) {
-								console.warn("[claude-code] onExternalToolCall callback failed:", error);
+						const assistantEvent = builder.handleEvent(event);
+						if (assistantEvent) {
+							stream.push(assistantEvent);
+							if (assistantEvent.type === "toolcall_start") {
+								const toolBlock = assistantEvent.partial.content[assistantEvent.contentIndex];
+								if (toolBlock?.type === "toolCall") {
+									try {
+										await onExternalToolCall?.(toolBlock);
+									} catch (error) {
+										console.warn("[claude-code] onExternalToolCall callback failed:", error);
+									}
+								}
 							}
 						}
+						break;
 					}
-					break;
-				}
 
 				// -- Complete assistant message (non-streaming fallback) --
 				case "assistant": {
