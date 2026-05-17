@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { webPreferencesPath } from "../../../../src/app-paths.ts";
 
 export const runtime = "nodejs";
@@ -11,19 +11,15 @@ interface WebPreferences {
   lastActiveProject?: string;
 }
 
-/**
- * Shape returned by GET. `launchCwd` is the CWD the user launched `gsd --web`
- * from, propagated by the CLI via `GSD_WEB_PROJECT_CWD`. The client uses it
- * to auto-select the launch project instead of falling back to
- * `lastActiveProject` (or alphabetically first). See issue #6344.
- */
 interface WebPreferencesResponse extends WebPreferences {
   launchCwd: string | null;
 }
 
 function readLaunchCwd(): string | null {
   const v = process.env.GSD_WEB_PROJECT_CWD;
-  return typeof v === "string" && v.length > 0 ? v : null;
+  if (typeof v !== "string" || v.length === 0) return null;
+  // Normalize so the value matches the resolved path the client compares against.
+  return resolve(v);
 }
 
 // ─── GET: read current preferences ─────────────────────────────────────────

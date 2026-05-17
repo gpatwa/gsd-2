@@ -592,12 +592,14 @@ function ProjectAwareWorkspace() {
   const activeProjectCwd = useSyncExternalStore(manager.subscribe, manager.getSnapshot, manager.getSnapshot)
   const activeStore = activeProjectCwd ? manager.getActiveStore() : null
 
-  // #6344 — when `gsd --web` was launched from a project directory the CLI
-  // propagates that path via GSD_WEB_PROJECT_CWD. The preferences endpoint
-  // surfaces it as `launchCwd`; auto-select that project once on first mount
-  // so the launch CWD wins over `lastActiveProject` / alphabetic fallback.
+  // Auto-select the launch project when `gsd --web` was started from a project
+  // directory. Guarded by a ref so React's StrictMode double-invoke cannot
+  // trigger two parallel switchProject calls.
+  const launchCwdFetched = useRef(false)
   useEffect(() => {
+    if (launchCwdFetched.current) return
     if (manager.getActiveProjectCwd()) return
+    launchCwdFetched.current = true
     let cancelled = false
     void (async () => {
       try {
