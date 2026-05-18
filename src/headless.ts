@@ -356,7 +356,15 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   if (options.command === 'query') {
     const { handleQuery } = await import('./headless-query.js')
     const result = await handleQuery(process.cwd())
-    return { exitCode: result.exitCode, interrupted: false }
+    // query is a read-only snapshot: no RPC child, no tracked events.
+    return {
+      exitCode: result.exitCode,
+      interrupted: false,
+      totalEvents: 0,
+      toolCallCount: 0,
+      recentEvents: [],
+      status: result.exitCode === 0 ? 'success' : 'error',
+    }
   }
 
   // Recover: rebuild DB hierarchy from on-disk markdown projections, no RPC
