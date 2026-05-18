@@ -96,6 +96,29 @@ describe("TUI", () => {
 		);
 	});
 
+	it("redraws on terminal resize even when component output is unchanged", () => {
+		// Image protocol lines are intentionally skipped by applyLineResets(),
+		// so they preserve the container's cached array reference. A stable
+		// reference must not skip frame-state work like terminal resize handling.
+		const writes: string[] = [];
+		const terminal = makeTerminal(writes);
+		const tui = new TUI(terminal);
+		tui.addChild({ render: () => ["\x1b_Gimage-payload\x1b\\"], invalidate() {} });
+		const anyTui = tui as any;
+
+		anyTui.doRender();
+		const writesBeforeResize = writes.length;
+
+		Object.defineProperty(terminal, "columns", { configurable: true, value: 100 });
+		anyTui.doRender();
+
+		const resizeWrites = writes.slice(writesBeforeResize).join("");
+		assert.ok(
+			resizeWrites.includes("\x1b[2J"),
+			"resize must force a full redraw even when the component render array is cached",
+		);
+	});
+
 	it("omits synchronized-output wrappers when PI_DISABLE_SYNC_OUTPUT is enabled", () => {
 		const previous = process.env.PI_DISABLE_SYNC_OUTPUT;
 		process.env.PI_DISABLE_SYNC_OUTPUT = "1";

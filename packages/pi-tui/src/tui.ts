@@ -652,6 +652,8 @@ export class TUI extends Container {
 			const targetScreenRow = targetRow - viewportTop;
 			return targetScreenRow - currentScreenRow;
 		};
+		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
+		const heightChanged = this.previousHeight !== 0 && this.previousHeight !== height;
 
 		// Render all components to get new lines
 		let newLines = this.render(width);
@@ -664,7 +666,9 @@ export class TUI extends Container {
 		if (
 			newLines === this._lastRenderedComponents &&
 			this.overlayStack.length === 0 &&
-			!this._lastFrameHadOverlays
+			!this._lastFrameHadOverlays &&
+			!widthChanged &&
+			!heightChanged
 		) {
 			return;
 		}
@@ -680,10 +684,6 @@ export class TUI extends Container {
 		const cursorPos = extractCursorPosition(newLines, height);
 
 		newLines = applyLineResets(newLines);
-
-		// Width or height changed - need full re-render
-		const widthChanged = this.previousWidth !== 0 && this.previousWidth !== width;
-		const heightChanged = this.previousHeight !== 0 && this.previousHeight !== height;
 
 		// Helper to clear scrollback and viewport and render all new lines
 		const fullRender = (clear: boolean): void => {
