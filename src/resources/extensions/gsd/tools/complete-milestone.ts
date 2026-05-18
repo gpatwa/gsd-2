@@ -1,6 +1,3 @@
-// Project/App: GSD-2
-// File Purpose: Complete-milestone tool handler for GSD workflow state and summaries.
-
 // GSD2 complete-milestone tool handler
 /**
  * complete-milestone handler — the core operation behind gsd_complete_milestone.
@@ -11,7 +8,7 @@
  */
 
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 
 import {
   transaction,
@@ -21,8 +18,7 @@ import {
   getLatestAssessmentByScope,
   updateMilestoneStatus,
 } from "../gsd-db.js";
-import { gsdProjectionRoot, clearPathCache } from "../paths.js";
-import { resolveCanonicalMilestoneRoot } from "../worktree-manager.js";
+import { resolveMilestonePath, clearPathCache } from "../paths.js";
 import { isClosedStatus } from "../status-guards.js";
 import { saveFile, clearParseCache } from "../files.js";
 import { invalidateStateCache } from "../state.js";
@@ -139,8 +135,6 @@ export async function handleCompleteMilestone(
     return { error: "title is required and must be a non-empty string" };
   }
 
-  const artifactBasePath = resolveCanonicalMilestoneRoot(basePath, params.milestoneId);
-
   // ── Verify that verification passed ─────────────────────────────────────
   if (params.verificationPassed !== true) {
     return { error: "verification did not pass — milestone completion blocked. verificationPassed must be explicitly set to true after all verification steps succeed" };
@@ -208,12 +202,16 @@ export async function handleCompleteMilestone(
   // ── Filesystem operations (outside transaction) ─────────────────────────
   const summaryMd = renderMilestoneSummaryMarkdown(params, completedAt);
 
-  const summaryPath = join(
-    gsdProjectionRoot(artifactBasePath),
-    "milestones",
-    params.milestoneId,
-    `${params.milestoneId}-SUMMARY.md`,
-  );
+  let summaryPath: string;
+  const milestoneDir = resolveMilestonePath(basePath, params.milestoneId);
+  if (milestoneDir) {
+    summaryPath = join(milestoneDir, `${params.milestoneId}-SUMMARY.md`);
+  } else {
+    const gsdDir = join(basePath, ".gsd");
+    const manualDir = join(gsdDir, "milestones", params.milestoneId);
+    mkdirSync(manualDir, { recursive: true });
+    summaryPath = join(manualDir, `${params.milestoneId}-SUMMARY.md`);
+  }
 
   // Guard (#4598): if SUMMARY.md already exists on disk, do not overwrite it.
   // This handles re-dispatch scenarios (DB/disk state divergence) where a prior
@@ -240,18 +238,18 @@ export async function handleCompleteMilestone(
   // Separate try/catch per step so a projection failure doesn't prevent
   // the event log entry (critical for worktree reconciliation).
   try {
-    await renderAllProjections(artifactBasePath, params.milestoneId);
+    await renderAllProjections(basePath, params.milestoneId);
   } catch (projErr) {
     logWarning("tool", `complete-milestone projection warning: ${(projErr as Error).message}`);
   }
   try {
-    writeManifest(artifactBasePath);
+    writeManifest(basePath);
   } catch (mfErr) {
     logWarning("tool", `complete-milestone manifest warning: ${(mfErr as Error).message}`);
   }
   try {
     if (!alreadyComplete) {
-      appendEvent(artifactBasePath, {
+      appendEvent(basePath, {
         cmd: "complete-milestone",
         params: { milestoneId: params.milestoneId },
         ts: new Date().toISOString(),

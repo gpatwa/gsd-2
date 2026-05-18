@@ -1,6 +1,3 @@
-// Project/App: GSD-2
-// File Purpose: Complete-slice tool handler for GSD workflow state and summaries.
-
 /**
  * complete-slice handler — the core operation behind gsd_slice_complete.
  *
@@ -12,6 +9,7 @@
  */
 
 import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 
 import type { CompleteSliceParams } from "../types.js";
 import { isClosedStatus } from "../status-guards.js";
@@ -28,8 +26,7 @@ import {
   getPendingGatesForTurn,
 } from "../gsd-db.js";
 import { getGatesForTurn } from "../gate-registry.js";
-import { gsdProjectionRoot, clearPathCache } from "../paths.js";
-import { resolveCanonicalMilestoneRoot } from "../worktree-manager.js";
+import { resolveSliceFile, resolveSlicePath, clearPathCache } from "../paths.js";
 import { checkOwnership, sliceUnitKey } from "../unit-ownership.js";
 import { saveFile, clearParseCache } from "../files.js";
 import { invalidateStateCache } from "../state.js";
@@ -70,17 +67,6 @@ function sliceGateFieldForId(
     default:
       return undefined;
   }
-}
-
-function sliceSummaryPath(basePath: string, milestoneId: string, sliceId: string): string {
-  return join(
-    gsdProjectionRoot(basePath),
-    "milestones",
-    milestoneId,
-    "slices",
-    sliceId,
-    `${sliceId}-SUMMARY.md`,
-  );
 }
 
 /**
@@ -297,11 +283,9 @@ export async function handleCompleteSlice(
     return { error: "milestoneId is required and must be a non-empty string" };
   }
 
-  const artifactBasePath = resolveCanonicalMilestoneRoot(basePath, params.milestoneId);
-
   // ── Ownership check (opt-in: only enforced when claim file exists) ──────
   const ownershipErr = checkOwnership(
-    artifactBasePath,
+    basePath,
     sliceUnitKey(params.milestoneId, params.sliceId),
     params.actorName,
   );
@@ -367,11 +351,18 @@ export async function handleCompleteSlice(
   if (guardError === "__stale_duplicate__") {
     // Stale duplicate from a turn superseded by timeout recovery. Return a
     // non-mutating success so the orphaned LLM tool call unwinds quietly.
-    const staleSummaryPath = sliceSummaryPath(
-      artifactBasePath,
-      params.milestoneId,
-      params.sliceId,
-    );
+    const sliceDir = resolveSlicePath(basePath, params.milestoneId, params.sliceId);
+    const staleSummaryPath = sliceDir
+      ? join(sliceDir, `${params.sliceId}-SUMMARY.md`)
+      : join(
+          basePath,
+          ".gsd",
+          "milestones",
+          params.milestoneId,
+          "slices",
+          params.sliceId,
+          `${params.sliceId}-SUMMARY.md`,
+        );
     return {
       sliceId: params.sliceId,
       milestoneId: params.milestoneId,
@@ -409,11 +400,17 @@ export async function handleCompleteSlice(
   const summaryMd = renderSliceSummaryMarkdown(effectiveParams);
 
   // Resolve and write summary to disk
-  const summaryPath = sliceSummaryPath(
-    artifactBasePath,
-    params.milestoneId,
-    params.sliceId,
-  );
+  let summaryPath: string;
+  const sliceDir = resolveSlicePath(basePath, params.milestoneId, params.sliceId);
+  if (sliceDir) {
+    summaryPath = join(sliceDir, `${params.sliceId}-SUMMARY.md`);
+  } else {
+    // Slice dir doesn't exist on disk yet — build path manually and ensure dirs
+    const gsdDir = join(basePath, ".gsd");
+    const manualSliceDir = join(gsdDir, "milestones", params.milestoneId, "slices", params.sliceId);
+    mkdirSync(manualSliceDir, { recursive: true });
+    summaryPath = join(manualSliceDir, `${params.sliceId}-SUMMARY.md`);
+  }
 
   const uatMd = renderUatMarkdown(effectiveParams);
   const uatPath = summaryPath.replace(/-SUMMARY\.md$/, "-UAT.md");
@@ -425,7 +422,7 @@ export async function handleCompleteSlice(
     await saveFile(uatPath, uatMd);
 
     // Toggle roadmap checkbox via renderer module
-    const roadmapToggled = await renderRoadmapCheckboxes(artifactBasePath, params.milestoneId);
+    const roadmapToggled = await renderRoadmapCheckboxes(basePath, params.milestoneId);
     if (!roadmapToggled) {
       logWarning("tool", `complete_slice — could not find roadmap for ${params.milestoneId}, skipping checkbox toggle`);
     }
@@ -482,17 +479,17 @@ export async function handleCompleteSlice(
   // Separate try/catch per step so a projection failure doesn't prevent
   // the event log entry (critical for worktree reconciliation).
   try {
-    await renderAllProjections(artifactBasePath, params.milestoneId);
+    await renderAllProjections(basePath, params.milestoneId);
   } catch (projErr) {
     logWarning("tool", `complete-slice projection warning for ${params.milestoneId}/${params.sliceId}: ${(projErr as Error).message}`);
   }
   try {
-    writeManifest(artifactBasePath);
+    writeManifest(basePath);
   } catch (mfErr) {
     logWarning("tool", `complete-slice manifest warning: ${(mfErr as Error).message}`);
   }
   try {
-    appendEvent(artifactBasePath, {
+    appendEvent(basePath, {
       cmd: "complete-slice",
       params: { milestoneId: params.milestoneId, sliceId: params.sliceId },
       ts: new Date().toISOString(),
@@ -522,8 +519,8 @@ export async function handleCompleteSlice(
       ) {
         throw new Error("graph helpers unavailable from @gsd-build/mcp-server");
       }
-      const g = await graphMod.buildGraph(artifactBasePath);
-      await graphMod.writeGraph(graphMod.resolveGsdRoot(artifactBasePath), g);
+      const g = await graphMod.buildGraph(basePath);
+      await graphMod.writeGraph(graphMod.resolveGsdRoot(basePath), g);
     } catch (graphErr) {
       // Graph rebuild is best-effort — log at warning level but never propagate
       logWarning("tool", `complete-slice graph rebuild failed (non-fatal): ${(graphErr as Error).message ?? String(graphErr)}`);

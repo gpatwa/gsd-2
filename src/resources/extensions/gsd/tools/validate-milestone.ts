@@ -1,6 +1,3 @@
-// Project/App: GSD-2
-// File Purpose: Validate-milestone tool handler for GSD workflow quality gates.
-
 /**
  * validate-milestone handler — the core operation behind gsd_validate_milestone.
  *
@@ -20,7 +17,7 @@ import {
   getMilestoneSlices,
   getMilestone,
 } from "../gsd-db.js";
-import { gsdProjectionRoot, clearPathCache } from "../paths.js";
+import { resolveMilestonePath, clearPathCache } from "../paths.js";
 import { resolveCanonicalMilestoneRoot } from "../worktree-manager.js";
 import { saveFile, clearParseCache } from "../files.js";
 import { invalidateStateCache } from "../state.js";
@@ -140,13 +137,17 @@ export async function handleValidateMilestone(
   // worktree's artifacts instead of stale project-root state.
   const validationMd = renderValidationMarkdown(params);
 
-  const artifactBasePath = resolveCanonicalMilestoneRoot(basePath, params.milestoneId);
-  const validationPath = join(
-    gsdProjectionRoot(artifactBasePath),
-    "milestones",
-    params.milestoneId,
-    `${params.milestoneId}-VALIDATION.md`,
-  );
+  const canonicalBase = resolveCanonicalMilestoneRoot(basePath, params.milestoneId);
+
+  let validationPath: string;
+  const milestoneDir = resolveMilestonePath(canonicalBase, params.milestoneId);
+  if (milestoneDir) {
+    validationPath = join(milestoneDir, `${params.milestoneId}-VALIDATION.md`);
+  } else {
+    const gsdDir = join(canonicalBase, ".gsd");
+    const manualDir = join(gsdDir, "milestones", params.milestoneId);
+    validationPath = join(manualDir, `${params.milestoneId}-VALIDATION.md`);
+  }
 
   // ── DB write first — matches complete-task/complete-slice pattern ───
   // Write DB before disk so a crash between the two leaves a recoverable
@@ -213,7 +214,7 @@ export async function handleValidateMilestone(
         }),
       });
       await gateRunner.run("milestone-validation-gates", {
-        basePath: artifactBasePath,
+        basePath,
         traceId: opts?.traceId ?? `validate-milestone:${params.milestoneId}`,
         turnId: opts?.turnId ?? `${params.milestoneId}:validate`,
         milestoneId: params.milestoneId,

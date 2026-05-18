@@ -1,5 +1,3 @@
-// Project/App: GSD-2
-// File Purpose: Tests auto-mode artifact verification and recovery behavior.
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
@@ -127,86 +125,6 @@ test("plan-slice artifact resolution handles lowercase unit IDs against uppercas
       verifyExpectedArtifact("plan-slice", "m001/s01", base),
       true,
       "verification should pass when the uppercase slice plan and task plans exist",
-    );
-  } finally {
-    cleanup(base);
-  }
-});
-
-test("plan-slice verification accepts artifacts rendered in the live milestone worktree", () => {
-  const base = makeTmpBase();
-  try {
-    const rootSlicePlan = join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-PLAN.md");
-    rmSync(rootSlicePlan, { force: true });
-
-    const worktree = join(base, ".gsd", "worktrees", "M001");
-    const worktreeSliceDir = join(worktree, ".gsd", "milestones", "M001", "slices", "S01");
-    const worktreeTasksDir = join(worktreeSliceDir, "tasks");
-    mkdirSync(worktreeTasksDir, { recursive: true });
-    writeFileSync(join(worktree, ".git"), "gitdir: ../../../../.git/worktrees/M001\n", "utf-8");
-    writeFileSync(join(worktreeSliceDir, "S01-PLAN.md"), [
-      "# S01: Test Slice",
-      "",
-      "## Tasks",
-      "",
-      "- [ ] **T01: Implement feature** `est:1h`",
-    ].join("\n"));
-    writeFileSync(join(worktreeTasksDir, "T01-PLAN.md"), "# T01 Plan");
-
-    assert.equal(
-      verifyExpectedArtifact("plan-slice", "M001/S01", base),
-      true,
-      "verification should use the live worktree projection when project-root markdown is stale",
-    );
-  } finally {
-    cleanup(base);
-  }
-});
-
-test("complete-slice verification accepts artifacts rendered in the project root while a live worktree exists", () => {
-  const base = makeTmpBase();
-  try {
-    const milestoneDir = join(base, ".gsd", "milestones", "M001");
-    const sliceDir = join(milestoneDir, "slices", "S01");
-    writeFileSync(join(milestoneDir, "M001-ROADMAP.md"), [
-      "# M001: Test",
-      "",
-      "## Slices",
-      "",
-      "- [x] **S01: Test Slice** `risk:low` `depends:[]`",
-      "  > After this: done",
-    ].join("\n"));
-    writeFileSync(join(sliceDir, "S01-SUMMARY.md"), "# S01 Summary\nDone.");
-    writeFileSync(join(sliceDir, "S01-UAT.md"), "# S01 UAT\nPass.");
-
-    const worktree = join(base, ".gsd", "worktrees", "M001");
-    mkdirSync(join(worktree, ".gsd", "milestones", "M001", "slices", "S01"), { recursive: true });
-    writeFileSync(join(worktree, ".git"), "gitdir: ../../../../.git/worktrees/M001\n", "utf-8");
-
-    assert.equal(
-      verifyExpectedArtifact("complete-slice", "M001/S01", base),
-      true,
-      "verification should accept project-root slice summary/UAT artifacts when the live worktree projection is stale",
-    );
-  } finally {
-    cleanup(base);
-  }
-});
-
-test("validate-milestone verification accepts project-root VALIDATION while a live worktree exists", () => {
-  const base = makeTmpBase();
-  try {
-    const milestoneDir = join(base, ".gsd", "milestones", "M001");
-    writeFileSync(join(milestoneDir, "M001-VALIDATION.md"), "---\nverdict: pass\n---\n# Validation\nPass.");
-
-    const worktree = join(base, ".gsd", "worktrees", "M001");
-    mkdirSync(join(worktree, ".gsd", "milestones", "M001"), { recursive: true });
-    writeFileSync(join(worktree, ".git"), "gitdir: ../../../../.git/worktrees/M001\n", "utf-8");
-
-    assert.equal(
-      verifyExpectedArtifact("validate-milestone", "M001", base),
-      true,
-      "verification should accept project-root validation artifacts when the live worktree projection is stale",
     );
   } finally {
     cleanup(base);
