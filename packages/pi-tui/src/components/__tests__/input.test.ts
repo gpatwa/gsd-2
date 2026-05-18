@@ -3,6 +3,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { stripVTControlCharacters } from "node:util";
 import { Input } from "../input.js";
 
 describe("Input", () => {
@@ -76,5 +77,23 @@ describe("Input", () => {
 		input.handleInput("\x1b[57417u");
 
 		assert.equal(input.getValue(), "");
+	});
+
+	it("keeps yank-pop cursor at or above zero after external value shrink", () => {
+		const input = new Input();
+
+		input.handleInput("first");
+		input.handleInput("\x15"); // Ctrl+U: kill to line start
+		input.handleInput("second");
+		input.handleInput("\x15"); // Ctrl+U: kill another entry
+		input.handleInput("\x19"); // Ctrl+Y: yank "second"
+
+		input.setValue("");
+		input.handleInput("\x1by"); // Alt+Y: yank-pop to "first"
+
+		assert.equal(input.getValue(), "first");
+		const rendered = stripVTControlCharacters(input.render(20)[0] ?? "");
+		assert.doesNotMatch(rendered, /firstfirst/, "negative cursor must not duplicate rendered text");
+		assert.match(rendered, /^> first /, "cursor should land after the replacement text");
 	});
 });
