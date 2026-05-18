@@ -18,7 +18,7 @@ const SLICE_DISPATCH_TYPES = new Set([
   "complete-slice",
 ]);
 
-const CONSECUTIVE_SAME_UNIT_CAP = 2;
+const CONSECUTIVE_SAME_UNIT_CAP = 5;
 
 type ConsecutiveDispatchState = Pick<
   LoopState,
@@ -30,7 +30,10 @@ type ConsecutiveDispatchState = Pick<
  *
  * Applies to all unit types. The first dispatch for a unit/phase pair starts
  * a counter, phase changes reset tracking, and dispatch is blocked once the
- * counter reaches `CONSECUTIVE_SAME_UNIT_CAP`.
+ * counter reaches `CONSECUTIVE_SAME_UNIT_CAP` (5). The cap is intentionally
+ * above the stuck-detection hard-stop threshold (4 consecutive dispatches) so
+ * that stuck detection always fires first; this guard acts as a last-resort
+ * safety net for edge cases where stuck detection is suppressed.
  *
  * Side effects: mutates `state.consecutiveDispatchCount`,
  * `state.lastDispatchedKey`, and `state.lastDispatchPhase`.
