@@ -56,11 +56,13 @@ export function mapStatusToExitCode(status: string): number {
 /**
  * Detect genuine auto-mode termination notifications.
  *
- * Only matches the actual stop/pause signals emitted by stopAuto()/pauseAuto():
+ * Matches the actual stop/pause signals emitted by stopAuto()/pauseAuto():
  *   "Auto-mode stopped..."
  *   "Step-mode stopped..."
  *   "Auto-mode paused..."
  *   "Step-mode paused..."
+ * plus bootstrap-time manual-resolution failures that return before auto-mode
+ * can emit a formal pause/stop notification.
  *
  * Does NOT match progress notifications that happen to contain words like
  * "complete" or "stopped" (e.g., "Override resolved — rewrite-docs completed",
@@ -77,17 +79,25 @@ export const IDLE_TIMEOUT_MS = 15_000
 export const NEW_MILESTONE_IDLE_TIMEOUT_MS = 120_000
 const INTERACTIVE_HEADLESS_TOOLS = new Set(['ask_user_questions', 'secure_env_collect'])
 
+function isManualResolutionNotification(message: string): boolean {
+  return (
+    message.includes('resolve manually and re-run /gsd auto') ||
+    message.includes('resolve conflicts manually and run /gsd auto to resume') ||
+    message.includes('resolve and run /gsd auto to resume')
+  )
+}
+
 export function isTerminalNotification(event: Record<string, unknown>): boolean {
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix))
+  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 export function isBlockedNotification(event: Record<string, unknown>): boolean {
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
   // Recoverable pauses need operator intervention in headless mode.
-  return message.includes('blocked:') || PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix))
+  return message.includes('blocked:') || PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 export function isMilestoneReadyNotification(event: Record<string, unknown>): boolean {

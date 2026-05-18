@@ -23,11 +23,16 @@ function binaryAvailable(): { ok: boolean; reason?: string } {
 }
 
 function commitFixture(dir: string): void {
-	execFileSync("git", ["add", ".gitignore", "package.json", "src/answer.js", "test/answer.test.js"], {
-		cwd: dir,
-		stdio: "pipe",
-	});
-	execFileSync("git", ["commit", "-m", "test: seed headless pause fixture"], { cwd: dir, stdio: "pipe" });
+	commitPaths(dir, [".gitignore", "package.json", "src/answer.js", "test/answer.test.js"], "test: seed headless pause fixture");
+}
+
+function commitPaths(dir: string, paths: string[], message: string): void {
+	execFileSync("git", ["add", ...paths], { cwd: dir, stdio: "pipe" });
+	execFileSync("git", ["commit", "-m", message], { cwd: dir, stdio: "pipe" });
+}
+
+function git(dir: string, args: string[]): void {
+	execFileSync("git", args, { cwd: dir, stdio: "pipe" });
 }
 
 function writeRecoveredMilestone(dir: string): void {
@@ -81,6 +86,29 @@ function writeRecoveredMilestone(dir: string): void {
 			"",
 		].join("\n"),
 	);
+}
+
+function writeCompletedConflictMilestone(dir: string): void {
+	const milestoneDir = join(dir, ".gsd", "milestones", "M001");
+	mkdirSync(milestoneDir, { recursive: true });
+	writeFileSync(join(dir, ".gsd", "PREFERENCES.md"), "## Git\n- isolation: worktree\n");
+	writeFileSync(
+		join(milestoneDir, "M001-ROADMAP.md"),
+		[
+			"# M001: Merge Conflict Fixture",
+			"",
+			"## Slices",
+			"",
+			"- [x] **S01: Conflict slice** `risk:low` `depends:[]`",
+			"  > After this: the milestone branch has source work that must be merged.",
+			"",
+		].join("\n"),
+	);
+	writeFileSync(
+		join(milestoneDir, "M001-VALIDATION.md"),
+		"---\nverdict: pass\nremediation_round: 0\n---\n\n# Validation\nPassed.\n",
+	);
+	writeFileSync(join(milestoneDir, "M001-SUMMARY.md"), "# M001 Summary\n\nDone.\n");
 }
 
 describe("headless auto pause e2e (fake LLM)", () => {
@@ -176,6 +204,88 @@ describe("headless auto pause e2e (fake LLM)", () => {
 		assert.ok(
 			notifyMessages.some((message) => /^auto-mode paused/i.test(message)),
 			`expected terminal auto-mode paused notification, got:\n${notifyMessages.join("\n")}`,
+		);
+	});
+
+	test("headless auto exits blocked when survivor milestone merge needs manual conflict resolution", { skip: skipReason ?? false }, (t) => {
+		const project = createTmpProject({
+			git: true,
+			files: {
+				".gitignore": ".gsd/worktrees/\n",
+				"package.json": JSON.stringify({ type: "module" }, null, 2) + "\n",
+				"src/conflict.js": "export const value = \"base\";\n",
+			},
+		});
+		t.after(project.cleanup);
+		commitPaths(project.dir, [".gitignore", "package.json", "src/conflict.js"], "test: seed merge conflict fixture");
+		writeCompletedConflictMilestone(project.dir);
+
+		const recover = gsdSync(["headless", "recover"], {
+			cwd: project.dir,
+			timeoutMs: 30_000,
+		});
+		assert.equal(
+			recover.code,
+			0,
+			`expected recover exit 0, got ${recover.code}. stderr=${recover.stderrClean.slice(0, 800)}`,
+		);
+
+		git(project.dir, ["checkout", "-b", "milestone/M001"]);
+		writeFileSync(join(project.dir, "src/conflict.js"), "export const value = \"milestone\";\n");
+		commitPaths(project.dir, ["src/conflict.js"], "feat: milestone conflict");
+		git(project.dir, ["checkout", "main"]);
+		writeFileSync(join(project.dir, "src/conflict.js"), "export const value = \"main\";\n");
+		commitPaths(project.dir, ["src/conflict.js"], "feat: main conflict");
+
+		const result = gsdSync(
+			[
+				"headless",
+				"--output-format",
+				"stream-json",
+				"--events",
+				"extension_ui_request,agent_end",
+				"--model",
+				"gsd-fake-model",
+				"--timeout",
+				"15000",
+				"--max-restarts",
+				"0",
+				"auto",
+			],
+			{
+				cwd: project.dir,
+				timeoutMs: 30_000,
+			},
+		);
+
+		const artifacts = artifactsFor("headless-survivor-merge-conflict-blocked");
+		artifacts.write("stdout.jsonl", result.stdout);
+		artifacts.write("stderr.log", result.stderr);
+
+		assert.equal(
+			result.code,
+			10,
+			`expected blocked exit 10, got code=${result.code} signal=${result.signal} timedOut=${result.timedOut}. artifacts: ${artifacts.dir}`,
+		);
+		assert.ok(!result.timedOut, "headless survivor merge conflict must exit before the harness timeout");
+		assert.ok(!/Timeout after/i.test(result.stderrClean), `headless should not report timeout:\n${result.stderrClean}`);
+
+		const events = parseJsonEvents(result.stdoutClean);
+		const notifyMessages = events
+			.filter((event) => event.type === "extension_ui_request" && event.method === "notify")
+			.map((event) => String(event.message ?? ""));
+
+		assert.ok(
+			notifyMessages.some((message) => /survivor-branch finalization for M001 failed/i.test(message)),
+			`expected survivor finalization failure notification, got:\n${notifyMessages.join("\n")}`,
+		);
+		assert.ok(
+			notifyMessages.some((message) => /src\/conflict\.js/.test(message)),
+			`expected conflicted source file in notifications, got:\n${notifyMessages.join("\n")}`,
+		);
+		assert.ok(
+			notifyMessages.some((message) => /resolve manually and re-run \/gsd auto/i.test(message)),
+			`expected manual resume instruction, got:\n${notifyMessages.join("\n")}`,
 		);
 	});
 });
