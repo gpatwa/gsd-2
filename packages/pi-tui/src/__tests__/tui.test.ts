@@ -239,4 +239,26 @@ describe("Container", () => {
 		assert.equal(c.children.length, 0);
 		assert.equal(counter.disposed, 2);
 	});
+
+	it("invalidate() clears the cached render reference even when child output is unchanged", () => {
+		const c = new Container();
+		let invalidateCount = 0;
+		c.addChild({
+			render: () => ["same"],
+			invalidate() {
+				invalidateCount++;
+			},
+		});
+
+		const first = c.render(80);
+		const stable = c.render(80);
+		assert.equal(stable, first, "unchanged output should reuse the cached render reference before invalidation");
+
+		c.invalidate();
+		const afterInvalidate = c.render(80);
+
+		assert.equal(invalidateCount, 1);
+		assert.notEqual(afterInvalidate, first, "invalidate must force a fresh render reference for the TUI frame pipeline");
+		assert.deepEqual(afterInvalidate, ["same"]);
+	});
 });

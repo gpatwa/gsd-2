@@ -210,6 +210,7 @@ export class Container implements Component {
 	}
 
 	invalidate(): void {
+		this._prevRender = null;
 		for (const child of this.children) {
 			child.invalidate?.();
 		}
