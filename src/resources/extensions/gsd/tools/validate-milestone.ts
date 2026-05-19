@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Validate-milestone tool handler for GSD workflow quality gates.
+
 /**
  * validate-milestone handler — the core operation behind gsd_validate_milestone.
  *
@@ -15,8 +18,9 @@ import {
   transaction,
   insertAssessment,
   getMilestoneSlices,
+  getMilestone,
 } from "../gsd-db.js";
-import { resolveMilestonePath, clearPathCache } from "../paths.js";
+import { gsdProjectionRoot, clearPathCache } from "../paths.js";
 import { resolveCanonicalMilestoneRoot } from "../worktree-manager.js";
 import { saveFile, clearParseCache } from "../files.js";
 import { invalidateStateCache } from "../state.js";
@@ -51,6 +55,24 @@ export interface ValidateMilestoneOptions {
   uokGatesEnabled?: boolean;
   traceId?: string;
   turnId?: string;
+}
+
+function isVerificationNotApplicable(value: string): boolean {
+  const v = (value ?? "").toLowerCase().trim().replace(/[.\s]+$/, "");
+  if (!v || v === "none") return true;
+  return /^(?:none(?:[\s._\u2014-]+[\s\S]*)?|n\/?a(?:[\s._\u2014-]+[\s\S]*)?|not[\s._-]+(?:applicable|required|needed|provided)(?:[\s._\u2014-]+[\s\S]*)?|no[\s._-]+operational[\s\S]*)$/i.test(v);
+}
+
+function getRequiredVerificationClasses(milestoneId: string): string[] {
+  const milestone = getMilestone(milestoneId);
+  if (!milestone) return [];
+
+  const required: string[] = [];
+  if (!isVerificationNotApplicable(milestone.verification_contract)) required.push("Contract");
+  if (!isVerificationNotApplicable(milestone.verification_integration)) required.push("Integration");
+  if (!isVerificationNotApplicable(milestone.verification_operational)) required.push("Operational");
+  if (!isVerificationNotApplicable(milestone.verification_uat)) required.push("UAT");
+  return required;
 }
 
 function renderValidationMarkdown(params: ValidateMilestoneParams): string {
@@ -99,6 +121,18 @@ export async function handleValidateMilestone(
   if (!isValidMilestoneVerdict(params.verdict)) {
     return { error: `verdict must be one of: ${VALIDATION_VERDICTS.join(", ")}` };
   }
+  const requiredClasses = getRequiredVerificationClasses(params.milestoneId);
+  if (requiredClasses.length > 0) {
+    const verificationClasses = params.verificationClasses ?? "";
+    const missingClass = requiredClasses.find(
+      (className) => !new RegExp(`\\b${className}\\b`, "i").test(verificationClasses),
+    );
+    if (missingClass) {
+      return {
+        error: `verificationClasses must include canonical row "${missingClass}" because this milestone planned ${missingClass.toLowerCase()} verification`,
+      };
+    }
+  }
 
   // ── Resolve paths and render markdown ────────────────────────────────
   // #4761: route through the canonical-root resolver so that when a live
@@ -106,17 +140,13 @@ export async function handleValidateMilestone(
   // worktree's artifacts instead of stale project-root state.
   const validationMd = renderValidationMarkdown(params);
 
-  const canonicalBase = resolveCanonicalMilestoneRoot(basePath, params.milestoneId);
-
-  let validationPath: string;
-  const milestoneDir = resolveMilestonePath(canonicalBase, params.milestoneId);
-  if (milestoneDir) {
-    validationPath = join(milestoneDir, `${params.milestoneId}-VALIDATION.md`);
-  } else {
-    const gsdDir = join(canonicalBase, ".gsd");
-    const manualDir = join(gsdDir, "milestones", params.milestoneId);
-    validationPath = join(manualDir, `${params.milestoneId}-VALIDATION.md`);
-  }
+  const artifactBasePath = resolveCanonicalMilestoneRoot(basePath, params.milestoneId);
+  const validationPath = join(
+    gsdProjectionRoot(artifactBasePath),
+    "milestones",
+    params.milestoneId,
+    `${params.milestoneId}-VALIDATION.md`,
+  );
 
   // ── DB write first — matches complete-task/complete-slice pattern ───
   // Write DB before disk so a crash between the two leaves a recoverable
@@ -183,7 +213,7 @@ export async function handleValidateMilestone(
         }),
       });
       await gateRunner.run("milestone-validation-gates", {
-        basePath,
+        basePath: artifactBasePath,
         traceId: opts?.traceId ?? `validate-milestone:${params.milestoneId}`,
         turnId: opts?.turnId ?? `${params.milestoneId}:validate`,
         milestoneId: params.milestoneId,

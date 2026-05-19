@@ -46,6 +46,9 @@ export class DynamicBorder implements Component {
 				ui.requestRender();
 			}
 		}, 200);
+		// The spinner is purely cosmetic — it must never keep the Node event loop
+		// alive on its own (otherwise a process can hang waiting for it to stop).
+		this.spinnerInterval.unref?.();
 		ui.requestRender();
 	}
 
@@ -66,6 +69,15 @@ export class DynamicBorder implements Component {
 
 	invalidate(): void {
 		// No cached state to invalidate currently
+	}
+
+	/**
+	 * Stop the spinner when the component is removed. Without this, a spinner
+	 * started via startSpinner() keeps firing its interval (and calling
+	 * ui.requestRender()) after the border is detached from its container.
+	 */
+	dispose(): void {
+		this.stopSpinner();
 	}
 
 	render(width: number): string[] {

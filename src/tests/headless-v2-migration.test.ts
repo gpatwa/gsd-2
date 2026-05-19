@@ -95,12 +95,20 @@ function handleExtensionUIRequest(
   switch (method) {
     case 'select': {
       const title = String(event.title ?? '')
-      let selected = event.options?.[0] ?? ''
-      if (title.includes('Auto-mode is running') && event.options) {
-        const forceOption = event.options.find(o => o.toLowerCase().includes('force start'))
-        if (forceOption) selected = forceOption
+      const options = event.options ?? []
+      if (title.includes('Auto-mode is running')) {
+        const forceOption = options.find(o => o.toLowerCase().includes('force start'))
+        if (forceOption) {
+          client.sendUIResponse(id, { value: forceOption })
+          break
+        }
       }
-      client.sendUIResponse(id, { value: selected })
+      const safeOption = options.find(o => /\b(not yet|cancel|skip|exit|abort)\b/i.test(o))
+      if (safeOption) {
+        client.sendUIResponse(id, { value: safeOption })
+        break
+      }
+      client.sendUIResponse(id, { cancelled: true })
       break
     }
     case 'confirm':
@@ -274,7 +282,7 @@ test('string-matching fallback works when execution_complete never received', ()
 
 // ─── handleExtensionUIRequest uses client.sendUIResponse ────────────────────
 
-test('handleExtensionUIRequest select calls sendUIResponse with value', () => {
+test('handleExtensionUIRequest select cancels when no safe option exists', () => {
   const client = new MockRpcClient()
 
   handleExtensionUIRequest(
@@ -284,7 +292,44 @@ test('handleExtensionUIRequest select calls sendUIResponse with value', () => {
 
   assert.equal(client.sendUICalls.length, 1)
   assert.equal(client.sendUICalls[0].id, 'sel1')
-  assert.equal(client.sendUICalls[0].response.value, 'option-a')
+  assert.equal(client.sendUICalls[0].response.cancelled, true)
+})
+
+test('handleExtensionUIRequest select prefers safe option when present', () => {
+  const client = new MockRpcClient()
+
+  handleExtensionUIRequest(
+    {
+      type: 'extension_ui_request',
+      id: 'sel-safe',
+      method: 'select',
+      options: ['Quick task (recommended)', 'Not yet: Run /gsd when ready.'],
+    },
+    client,
+  )
+
+  assert.equal(client.sendUICalls.length, 1)
+  assert.equal(client.sendUICalls[0].id, 'sel-safe')
+  assert.equal(client.sendUICalls[0].response.value, 'Not yet: Run /gsd when ready.')
+})
+
+test('handleExtensionUIRequest select prefers force start when Auto-mode is running', () => {
+  const client = new MockRpcClient()
+
+  handleExtensionUIRequest(
+    {
+      type: 'extension_ui_request',
+      id: 'sel-force',
+      method: 'select',
+      title: 'Auto-mode is running — another command is already executing',
+      options: ['View status', 'Force start anyway', 'Cancel'],
+    },
+    client,
+  )
+
+  assert.equal(client.sendUICalls.length, 1)
+  assert.equal(client.sendUICalls[0].id, 'sel-force')
+  assert.equal(client.sendUICalls[0].response.value, 'Force start anyway')
 })
 
 test('handleExtensionUIRequest confirm calls sendUIResponse with confirmed', () => {
@@ -501,6 +546,25 @@ test('multi-turn commands still complete via terminal notification', () => {
     client,
   )
   assert.equal(state.completed, true, 'terminal notification should trigger completion')
+  assert.equal(state.exitCode, EXIT_SUCCESS)
+})
+
+test('new-milestone auto phase ignores execution_complete until terminal notification', () => {
+  const client = new MockRpcClient()
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: true, isMultiTurnCommand: true }
+
+  handleEvent({ type: 'execution_complete', status: 'completed' }, state, client)
+
+  assert.equal(state.completed, false, 'auto-chained milestone execution must not stop after the first auto unit')
+  assert.equal(state.exitCode, -1)
+
+  handleEvent(
+    { type: 'extension_ui_request', method: 'notify', id: 'n1', message: 'Auto-mode stopped — milestone M001 complete' },
+    state,
+    client,
+  )
+
+  assert.equal(state.completed, true)
   assert.equal(state.exitCode, EXIT_SUCCESS)
 })
 

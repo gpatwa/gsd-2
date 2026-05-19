@@ -37,6 +37,7 @@ import {
   ReconciliationFailedError,
   type DriftHandler,
   type DriftRecord,
+  type ReconciliationDeps,
 } from "../state-reconciliation.ts";
 import { classifyFailure } from "../recovery-classification.ts";
 import type { GSDState } from "../types.ts";
@@ -1012,6 +1013,19 @@ test("ADR-017 (#5707): reconcileBeforeSpawn reports repaired drift in ok=true re
   if (result.ok) {
     assert.match(result.reason ?? "", /stale-sketch-flag/);
   }
+});
+
+test("ADR-017 (#6238): reconcileBeforeSpawn does not pass reconcile-only deps object", async () => {
+  let receivedDeps: ReconciliationDeps | undefined;
+  const result = await reconcileBeforeSpawn("/project", {
+    reconcile: async (_basePath, deps) => {
+      receivedDeps = deps;
+      return { ok: true, stateSnapshot: makeState(), repaired: [], blockers: [] };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(receivedDeps, undefined);
 });
 
 // ─── Lifecycle and classification ────────────────────────────────────────────
