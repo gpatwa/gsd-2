@@ -1,4 +1,5 @@
-// GSD-2 — Tests for step-mode completion messages in auto-post-unit
+// Project/App: GSD-2
+// File Purpose: Tests for step-mode completion messages in auto-post-unit.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -24,36 +25,36 @@ function makeState(overrides: Partial<GSDState>): GSDState {
   };
 }
 
-test("buildStepCompleteMessage: milestone complete surfaces review guidance", () => {
+test("buildStepCompleteMessage: terminal milestone completion leaves the roll-up as the only closeout message", () => {
   const msg = buildStepCompleteMessage(makeState({ phase: "complete" }));
-  assert.match(msg, /milestone finished/);
-  assert.match(msg, /\/gsd status/);
-  assert.doesNotMatch(msg, /Next:/);
+  assert.equal(msg, null);
 });
 
-test("buildStepCompleteMessage: mid-flight step includes next unit label and /clear hint", () => {
+test("buildStepCompleteMessage: mid-flight step includes next unit label and /gsd next hint", () => {
   const state = makeState({
     phase: "executing",
     activeSlice: { id: "S01", title: "Core" },
     activeTask: { id: "T03", title: "Wire notify" },
   });
   const msg = buildStepCompleteMessage(state);
+  assert.ok(msg);
   assert.match(msg, /Next: Execute T03: Wire notify/);
-  assert.match(msg, /\/clear/);
-  assert.match(msg, /\/gsd to continue/);
+  assert.doesNotMatch(msg, /\/clear/);
+  assert.match(msg, /\/gsd next to continue one step/);
 });
 
 test("buildStepCompleteMessage: unknown phase falls back to generic continue label", () => {
   // Cast to bypass Phase union so we exercise the default branch of describeNextUnit.
   const state = makeState({ phase: "totally-unknown" as unknown as GSDState["phase"] });
   const msg = buildStepCompleteMessage(state);
+  assert.ok(msg);
   assert.match(msg, /Next: Continue/);
-  assert.match(msg, /\/clear/);
+  assert.doesNotMatch(msg, /\/clear/);
 });
 
-test("STEP_COMPLETE_FALLBACK_MESSAGE: used when deriveState throws, still points users at /clear + /gsd", () => {
-  assert.match(STEP_COMPLETE_FALLBACK_MESSAGE, /\/clear/);
-  assert.match(STEP_COMPLETE_FALLBACK_MESSAGE, /\/gsd/);
+test("STEP_COMPLETE_FALLBACK_MESSAGE: used when deriveState throws, points users at /gsd next without /clear", () => {
+  assert.doesNotMatch(STEP_COMPLETE_FALLBACK_MESSAGE, /\/clear/);
+  assert.match(STEP_COMPLETE_FALLBACK_MESSAGE, /\/gsd next/);
 });
 
 test("shouldReturnStepWizardAfterUnit: terminal milestone completion continues to merge-back path", () => {

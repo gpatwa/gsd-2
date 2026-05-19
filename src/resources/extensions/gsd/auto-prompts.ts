@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Builds GSD auto-mode unit prompts and pre-dispatch checks.
+
 /**
  * Auto-mode Prompt Builders — construct dispatch prompts for each unit type.
  *
@@ -41,6 +44,7 @@ import { inlineGraphSubgraph } from "./graph-context.js";
 import { buildExtractionStepsBlock } from "./commands-extract-learnings.js";
 import { resolveSkillManifest, warnIfManifestHasMissingSkills } from "./skill-manifest.js";
 import { classifyProject, type ProjectClassification } from "./detection.js";
+import { hasBrowserRequiredText } from "./browser-evidence.js";
 
 // ─── Preamble Cap ─────────────────────────────────────────────────────────────
 
@@ -231,6 +235,19 @@ function prependContextModeToBlock(
   if (!contextMode) return block;
   if (!block.trim()) return contextMode;
   return `${contextMode}\n\n${block}`;
+}
+
+function resolveEffectiveUatType(content: string): UatType {
+  const uatType = getUatType(content);
+  if (uatType === "artifact-driven" && hasBrowserRequiredText(content)) {
+    return "browser-executable";
+  }
+  return uatType;
+}
+
+function shouldDispatchUatForContent(content: string, prefs: GSDPreferences | undefined): boolean {
+  const uatType = resolveEffectiveUatType(content);
+  return !!prefs?.uat_dispatch || uatType !== "artifact-driven" || hasBrowserRequiredText(content);
 }
 
 // ─── Executor Constraints ─────────────────────────────────────────────────────
@@ -1569,8 +1586,7 @@ export async function checkNeedsReassessment(
  *
  * Skips when:
  * - No roadmap or no completed slices
- * - All slices are done (milestone complete path — reassessment handles it)
- * - uat_dispatch preference is not enabled
+ * - uat_dispatch is not enabled and the UAT spec does not require runtime/browser evidence
  * - No UAT file exists for the slice
  * - UAT result file already exists (idempotent — already ran)
  */
@@ -1584,28 +1600,27 @@ export async function checkNeedsRunUat(
       const slices = getMilestoneSlices(mid);
       if (slices.length > 0) {
         const completedSlices = slices.filter(s => s.status === "complete");
-        const incompleteSlices = slices.filter(s => s.status !== "complete");
         if (completedSlices.length === 0) return null;
-        if (incompleteSlices.length === 0) return null;
-        if (!prefs?.uat_dispatch) return null;
-        const lastCompleted = completedSlices[completedSlices.length - 1];
-        const sid = lastCompleted.id;
-        const uatFile = resolveSliceFile(base, mid, sid, "UAT");
-        if (!uatFile) return null;
-        const uatContent = await loadFile(uatFile);
-        if (!uatContent) return null;
-        // If the UAT file already contains a verdict, UAT has been run — skip
-        if (hasVerdict(uatContent)) return null;
-        // Also check the ASSESSMENT file — the run-uat prompt writes the verdict
-        // there (via gsd_summary_save artifact_type:"ASSESSMENT"), not into the
-        // UAT spec file. Without this check the unit re-dispatches indefinitely.
-        const assessmentFile = resolveSliceFile(base, mid, sid, "ASSESSMENT");
-        if (assessmentFile) {
-          const assessmentContent = await loadFile(assessmentFile);
-          if (assessmentContent && hasVerdict(assessmentContent)) return null;
+        for (const completed of [...completedSlices].reverse()) {
+          const sid = completed.id;
+          const uatFile = resolveSliceFile(base, mid, sid, "UAT");
+          if (!uatFile) continue;
+          const uatContent = await loadFile(uatFile);
+          if (!uatContent) continue;
+          // If the UAT file already contains a verdict, UAT has been run — skip
+          if (hasVerdict(uatContent)) continue;
+          // Also check the ASSESSMENT file — the run-uat prompt writes the verdict
+          // there (via gsd_summary_save artifact_type:"ASSESSMENT"), not into the
+          // UAT spec file. Without this check the unit re-dispatches indefinitely.
+          const assessmentFile = resolveSliceFile(base, mid, sid, "ASSESSMENT");
+          if (assessmentFile) {
+            const assessmentContent = await loadFile(assessmentFile);
+            if (assessmentContent && hasVerdict(assessmentContent)) continue;
+          }
+          if (!shouldDispatchUatForContent(uatContent, prefs)) continue;
+          return { sliceId: sid, uatType: resolveEffectiveUatType(uatContent) };
         }
-        const uatType = getUatType(uatContent);
-        return { sliceId: sid, uatType };
+        return null;
       }
     }
   } catch (err) {
@@ -1613,32 +1628,32 @@ export async function checkNeedsRunUat(
   }
 
   // File-based fallback using roadmap checkboxes
-  if (!prefs?.uat_dispatch) return null;
   const roadmapPath = resolveMilestoneFile(base, mid, "ROADMAP");
   if (!roadmapPath) return null;
   const roadmapContent = await loadFile(roadmapPath);
   if (!roadmapContent) return null;
   const parsed = parseRoadmap(roadmapContent);
   const completedFileSlices = parsed.slices.filter(s => s.done);
-  const incompleteFileSlices = parsed.slices.filter(s => !s.done);
-  if (completedFileSlices.length === 0 || incompleteFileSlices.length === 0) return null;
-  const lastCompletedFile = completedFileSlices[completedFileSlices.length - 1];
-  const uatSid = lastCompletedFile.id;
-  const uatFileFb = resolveSliceFile(base, mid, uatSid, "UAT");
-  if (!uatFileFb) return null;
-  const uatContentFb = await loadFile(uatFileFb);
-  if (!uatContentFb) return null;
-  // If the UAT file already contains a verdict, UAT has been run — skip
-  if (hasVerdict(uatContentFb)) return null;
-  // Also check the ASSESSMENT file for the file-based fallback path (same
-  // reason as the DB path above — verdict lives in ASSESSMENT, not UAT).
-  const assessmentFileFb = resolveSliceFile(base, mid, uatSid, "ASSESSMENT");
-  if (assessmentFileFb) {
-    const assessmentContentFb = await loadFile(assessmentFileFb);
-    if (assessmentContentFb && hasVerdict(assessmentContentFb)) return null;
+  if (completedFileSlices.length === 0) return null;
+  for (const completed of [...completedFileSlices].reverse()) {
+    const uatSid = completed.id;
+    const uatFileFb = resolveSliceFile(base, mid, uatSid, "UAT");
+    if (!uatFileFb) continue;
+    const uatContentFb = await loadFile(uatFileFb);
+    if (!uatContentFb) continue;
+    // If the UAT file already contains a verdict, UAT has been run — skip
+    if (hasVerdict(uatContentFb)) continue;
+    // Also check the ASSESSMENT file for the file-based fallback path (same
+    // reason as the DB path above — verdict lives in ASSESSMENT, not UAT).
+    const assessmentFileFb = resolveSliceFile(base, mid, uatSid, "ASSESSMENT");
+    if (assessmentFileFb) {
+      const assessmentContentFb = await loadFile(assessmentFileFb);
+      if (assessmentContentFb && hasVerdict(assessmentContentFb)) continue;
+    }
+    if (!shouldDispatchUatForContent(uatContentFb, prefs)) continue;
+    return { sliceId: uatSid, uatType: resolveEffectiveUatType(uatContentFb) };
   }
-  const uatTypeFb = getUatType(uatContentFb);
-  return { sliceId: uatSid, uatType: uatTypeFb };
+  return null;
 }
 
 // ─── Prompt Builders ──────────────────────────────────────────────────────
@@ -1654,8 +1669,24 @@ export async function buildDiscussMilestonePrompt(
   midTitle: string,
   base: string,
   structuredQuestionsAvailable = "false",
+  { headless = false }: { headless?: boolean } = {},
 ): Promise<string> {
   const discussTemplates = inlineTemplate("context", "Context");
+
+  if (headless) {
+    const roadmapPath = resolveMilestoneFile(base, mid, "ROADMAP");
+    const roadmapContent = roadmapPath ? await loadFile(roadmapPath) : null;
+    return loadPrompt("discuss-headless", {
+      seedContext: roadmapContent ?? "",
+      inlinedTemplates: discussTemplates,
+      workingDirectory: base,
+      milestoneId: mid,
+      contextPath: relMilestoneFile(base, mid, "CONTEXT"),
+      commitInstruction: "Do not commit planning artifacts — .gsd/ is managed externally.",
+      multiMilestoneCommitInstruction: "Do not commit planning artifacts — .gsd/ is managed externally.",
+    });
+  }
+
   const contextModeInstructions = renderContextModeForPrompt("discuss-milestone", base);
 
   const basePrompt = loadPrompt("guided-discuss-milestone", {
@@ -2935,7 +2966,7 @@ export async function buildRunUatPrompt(
   );
 
   const uatResultPath = join(base, relSliceFile(base, mid, sliceId, "ASSESSMENT"));
-  const uatType = getUatType(uatContent);
+  const uatType = resolveEffectiveUatType(uatContent);
 
   return loadPrompt("run-uat", {
     workingDirectory: base,
@@ -3095,17 +3126,40 @@ export async function buildReactiveExecutePrompt(
       mid, sid, tid, node?.dependsOn ?? [], base,
     );
 
-    // Build a full execute-task prompt with dependency-based carry-forward
-    const taskPrompt = await buildExecuteTaskPrompt(
-      mid, sid, sTitle, tid, tTitle, base,
-      {
-        carryForwardPaths: depPaths,
-        sessionContextWindow: opts?.sessionContextWindow,
-        modelRegistry: opts?.modelRegistry,
-        sessionProvider: opts?.sessionProvider,
-        contextModeRenderMode: "nested",
-      },
-    );
+    const taskPlanPath = resolveTaskFile(base, mid, sid, tid, "PLAN");
+    const taskPlanContent = taskPlanPath ? await loadFile(taskPlanPath) : null;
+    const taskPlanRelPath = `${relSlicePath(base, mid, sid)}/tasks/${tid}-PLAN.md`;
+    const taskPlanInline = taskPlanContent
+      ? [
+          "## Inlined Task Plan (authoritative local execution contract)",
+          `Source: \`${taskPlanRelPath}\``,
+          "",
+          taskPlanContent.trim(),
+        ].join("\n")
+      : [
+          "## Inlined Task Plan (authoritative local execution contract)",
+          `Task plan not found at dispatch time. Read \`${taskPlanRelPath}\` before executing.`,
+        ].join("\n");
+    const carryForwardSection = await buildCarryForwardSection(depPaths, base);
+    const taskSummaryPath = `${relSlicePath(base, mid, sid)}/tasks/${tid}-SUMMARY.md`;
+    const taskPrompt = [
+      `## UNIT: Execute Task ${tid} ("${tTitle}")`,
+      "",
+      "Work only in the repository root.",
+      "Implement from the inlined task plan below. Verify changes, then call `gsd_task_complete`.",
+      "Do not run git commands.",
+      "",
+      carryForwardSection,
+      "",
+      taskPlanInline,
+      "",
+      "## Completion Contract",
+      `- Call \`gsd_task_complete\` with camelCase fields: \`milestoneId\`, \`sliceId\`, \`taskId\`, \`oneLiner\`, \`narrative\`, \`verification\`, and \`verificationEvidence\`.`,
+      `- Do not manually write \`${taskSummaryPath}\` or edit PLAN checkboxes; the completion tool is canonical.`,
+      `- Use \`blocker_discovered: true\` only if the task cannot be completed due to a real blocker.`,
+      "",
+      `When done, say: "Task ${tid} complete."`,
+    ].join("\n");
 
     const modelSuffix = subagentModel ? ` with model: "${subagentModel}"` : "";
     subagentSections.push([

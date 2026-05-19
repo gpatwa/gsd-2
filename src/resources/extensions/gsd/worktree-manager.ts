@@ -1,3 +1,6 @@
+// Project/App: GSD-2
+// File Purpose: Creates, resolves, and reconciles GSD milestone worktrees.
+
 /**
  * GSD Worktree Manager
  *
@@ -172,8 +175,9 @@ export function isInsideWorktreesDir(basePath: string, targetPath: string): bool
  * Readers that cross the session/worktree boundary (validators, the bootstrap
  * audit, cross-session state queries) should route through this helper so they
  * don't silently read stale project-root state while live work sits in the
- * worktree. Writers and tools whose contract is "operate on the path I was
- * given" should NOT use this helper — they preserve the legacy behavior.
+ * worktree. Workflow artifact writers may also use it when their contract is
+ * to update the live milestone projection; generic path-local tools should
+ * preserve "operate on the path I was given" behavior.
  *
  * A stale worktree directory (no `.git` file) is treated as absent. The
  * createWorktree() path already cleans these up, but readers must not trust
@@ -241,7 +245,19 @@ export function createWorktree(basePath: string, name: string, opts: { branch?: 
     const gitFilePath = join(wtPath, ".git");
     if (!existsSync(gitFilePath)) {
       logWarning("reconcile", `Removing stale worktree directory (no .git file): ${wtPath}`, { worktree: name });
-      rmSync(wtPath, { recursive: true, force: true });
+      try {
+        rmSync(wtPath, { recursive: true, force: true });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException)?.code;
+        if (code === "EPERM" || code === "EBUSY") {
+          throw new GSDError(
+            GSD_GIT_ERROR,
+            `Cannot remove stale worktree directory at ${wtPath} (${code}: directory may be locked by another process). Close editors/antivirus/git tools using this path and retry.`,
+            { cause: error as Error },
+          );
+        }
+        throw error;
+      }
     } else {
       throw new GSDError(GSD_STALE_STATE, `Worktree "${name}" already exists at ${wtPath}`);
     }
@@ -618,7 +634,7 @@ export function removeWorktree(
       try {
         rmSync(nestedGitPath, { recursive: true, force: true });
         logWarning("reconcile",
-          `Removed nested .git directory from scaffolded project to prevent data loss (#2616)`,
+          `Removed nested .git directory from scaffolded project to prevent data loss`,
           { worktree: name, nestedRepo: nestedDir },
         );
       } catch {

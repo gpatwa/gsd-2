@@ -18,6 +18,7 @@ export interface WorkflowCapabilityOptions {
   unitType?: string;
   authMode?: "apiKey" | "oauth" | "externalCli" | "none";
   baseUrl?: string;
+  activeTools?: string[];
 }
 
 const MCP_WORKFLOW_TOOL_SURFACE = new Set([
@@ -309,7 +310,13 @@ export function getRequiredWorkflowToolsForGuidedUnit(unitType: string): string[
     case "research-decision":
       return ["ask_user_questions"];
     case "discuss-milestone":
-      return ["gsd_summary_save", "gsd_plan_milestone"];
+      return [
+        "gsd_summary_save",
+        "gsd_requirement_save",
+        "gsd_requirement_update",
+        "gsd_plan_milestone",
+        "gsd_milestone_generate_id",
+      ];
     case "discuss-slice":
       return ["gsd_summary_save"];
     case "research-milestone":
@@ -337,7 +344,13 @@ export function getRequiredWorkflowToolsForAutoUnit(unitType: string): string[] 
     case "research-decision":
       return ["ask_user_questions"];
     case "discuss-milestone":
-      return ["gsd_summary_save", "gsd_plan_milestone"];
+      return [
+        "gsd_summary_save",
+        "gsd_requirement_save",
+        "gsd_requirement_update",
+        "gsd_plan_milestone",
+        "gsd_milestone_generate_id",
+      ];
     case "research-milestone":
     case "research-slice":
     case "run-uat":
@@ -383,6 +396,15 @@ function hasAskUserQuestionsTool(activeTools: string[]): boolean {
   });
 }
 
+function hasRequiredTool(requiredTool: string, activeTools: string[]): boolean {
+  return activeTools.some((toolName) => {
+    if (toolName === requiredTool) return true;
+    if (!toolName.startsWith("mcp__")) return false;
+    const toolSeparator = toolName.indexOf("__", "mcp__".length);
+    return toolSeparator >= 0 && toolName.slice(toolSeparator + 2) === requiredTool;
+  });
+}
+
 function workflowMcpStructuredQuestionsOptIn(env: NodeJS.ProcessEnv = process.env): boolean {
   const value = env.GSD_WORKFLOW_MCP_STRUCTURED_QUESTIONS;
   return value === "1" || value === "true";
@@ -423,8 +445,15 @@ export function getWorkflowTransportSupportError(
     return `Provider ${providerLabel} cannot run ${surface}${unitLabel}: the GSD workflow MCP server is not configured or discoverable. Detected Claude Code model but no workflow MCP. Please run /gsd mcp init . from your project root. You can also configure GSD_WORKFLOW_MCP_COMMAND, build packages/mcp-server/dist/cli.js, or install gsd-mcp-server on PATH.`;
   }
 
-  const missing = [...new Set(requiredTools)].filter((tool) => !MCP_WORKFLOW_TOOL_SURFACE.has(tool));
+  const uniqueRequired = [...new Set(requiredTools)];
+  const missing = (options.activeTools && options.activeTools.length > 0)
+    ? uniqueRequired.filter((tool) => !hasRequiredTool(tool, options.activeTools!))
+    : uniqueRequired.filter((tool) => !MCP_WORKFLOW_TOOL_SURFACE.has(tool));
   if (missing.length === 0) return null;
+
+  if (options.activeTools && options.activeTools.length > 0) {
+    return `Provider ${providerLabel} cannot run ${surface}${unitLabel}: this unit requires ${missing.join(", ")}, but the active runtime toolset currently exposes only ${options.activeTools.slice().sort().join(", ")}.`;
+  }
 
   return `Provider ${providerLabel} cannot run ${surface}${unitLabel}: this unit requires ${missing.join(", ")}, but the workflow MCP transport currently exposes only ${Array.from(MCP_WORKFLOW_TOOL_SURFACE).sort().join(", ")}.`;
 }

@@ -10,7 +10,12 @@ import assert from "node:assert/strict";
 import { classifyError, isTransient, isTransientNetworkError } from "../error-classifier.ts";
 import { pauseAutoForProviderError } from "../provider-error-pause.ts";
 import { resumeAutoAfterProviderDelay } from "../bootstrap/provider-error-resume.ts";
-import { MAX_TRANSIENT_AUTO_RESUMES, isTerminalDeletedWorktreeProviderError, resetTransientRetryState } from "../bootstrap/agent-end-recovery.ts";
+import {
+  MAX_TRANSIENT_AUTO_RESUMES,
+  isTerminalDeletedWorktreeProviderError,
+  resetTransientRetryState,
+  shouldDeferTransientErrorToCoreRetry,
+} from "../bootstrap/agent-end-recovery.ts";
 import { _buildCancelledUnitStopReason } from "../auto/phases.ts";
 import { getNextFallbackModel } from "../preferences.ts";
 // Zero-import module — imported by path rather than through the package
@@ -150,6 +155,12 @@ test("classifyError treats unknown error as not transient", () => {
   const result = classifyError("something went wrong");
   assert.ok(!isTransient(result));
   assert.equal(result.kind, "unknown");
+});
+
+test("classifyError treats schema overload as tool-schema (non-transient)", () => {
+  const result = classifyError("Schema overload: consecutive tool validation failures exceeded cap");
+  assert.equal(result.kind, "tool-schema");
+  assert.ok(!isTransient(result));
 });
 
 test("classifyError treats empty string as not transient", () => {
@@ -677,4 +688,16 @@ test("agent-session retryable error regex matches server_error (underscore)", ()
   assert.ok(!RETRYABLE_ERROR_RE.test("model not found"));
   // "temporarily backed off" must NOT be matched (intentional exclusion #3429)
   assert.ok(!RETRYABLE_ERROR_RE.test("temporarily backed off"));
+});
+
+test("exhausted retry errors are not deferred back to core retry handling", () => {
+  const cls = classifyError("Retry failed after 3 attempts: 500 empty_stream: upstream stream closed before first payload");
+  assert.equal(cls.kind, "server");
+  assert.equal(
+    shouldDeferTransientErrorToCoreRetry(
+      cls,
+      "Retry failed after 3 attempts: 500 empty_stream: upstream stream closed before first payload",
+    ),
+    false,
+  );
 });

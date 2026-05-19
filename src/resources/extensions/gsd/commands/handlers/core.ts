@@ -52,6 +52,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd prefs          Manage preferences (alias for /gsd setup prefs)",
     "  /gsd keys           API key manager (LLM + tool keys)",
     "  /gsd doctor         Diagnose and repair .gsd/ state",
+    "  /gsd closeout       Recover failed git closeout actions",
     "",
     "Use /gsd help full for the complete command reference.",
   ];
@@ -71,6 +72,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd new-project    Bootstrap a new project (use --deep for staged project-level discovery)",
     "  /gsd quick          Execute a quick task without full planning overhead",
     "  /gsd dispatch       Dispatch a specific phase directly  [research|plan|execute|complete|uat|replan]",
+    "  /gsd verdict <v>    Override milestone validation verdict  [pass|needs-attention|needs-remediation] [--milestone Mxxx] [--rationale \"...\"]",
     "  /gsd parallel       Parallel milestone orchestration  [start|status|stop|pause|resume|merge|watch]",
     "  /gsd workflow       Custom workflow lifecycle  [new|run|list|validate|pause|resume]",
     "",
@@ -137,6 +139,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd forensics      Examine execution logs and post-mortem analysis",
     "  /gsd export         Export milestone/slice results  [--json|--markdown|--html] [--all]",
     "  /gsd cleanup        Remove merged branches or snapshots  [branches|snapshots]",
+    "  /gsd closeout       Recover failed git closeout actions  [status|retry|resolve] [unit-id]",
     "  /gsd worktree       Manage worktrees from the TUI  [list|merge|clean|remove]",
     "  /gsd migrate        Migrate .planning/ (v1) to .gsd/ (v2) format",
     "  /gsd remote         Control remote auto-mode  [slack|discord|status|disconnect]",
