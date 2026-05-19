@@ -464,7 +464,9 @@ export async function _runMilestoneMergeWithStashRestore(
     const reason = preflight.blockedReason === "unmerged-conflicts"
       ? `Pre-merge unresolved Git conflicts block milestone ${milestoneId}`
       : `Pre-merge dirty working tree overlaps milestone ${milestoneId}`;
-    await deps.stopAuto(ctx, pi, reason);
+    await deps.stopAuto(ctx, pi, reason, {
+      preserveCompletedMilestoneBranch: true,
+    });
     return {
       action: "break",
       reason: preflight.blockedReason === "unmerged-conflicts"

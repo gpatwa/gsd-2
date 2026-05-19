@@ -17,6 +17,7 @@ interface CallLog {
   mergeCalls: number;
   postflightCalls: number;
   stopAutoCalls: Array<string | undefined>;
+  stopAutoOptions: Array<{ preserveCompletedMilestoneBranch?: boolean } | undefined>;
   pauseAutoCalls: Array<string | undefined>;
   notifyCalls: Array<{ message: string; level: string }>;
   milestoneMergedInPhases: boolean;
@@ -32,6 +33,7 @@ function buildIc(opts: {
     mergeCalls: 0,
     postflightCalls: 0,
     stopAutoCalls: [],
+    stopAutoOptions: [],
     pauseAutoCalls: [],
     notifyCalls: [],
     milestoneMergedInPhases: false,
@@ -98,8 +100,14 @@ function buildIc(opts: {
         }
       },
     },
-    stopAuto: async (_c?: unknown, _p?: unknown, reason?: string) => {
+    stopAuto: async (
+      _c?: unknown,
+      _p?: unknown,
+      reason?: string,
+      options?: { preserveCompletedMilestoneBranch?: boolean },
+    ) => {
       log.stopAutoCalls.push(reason);
+      log.stopAutoOptions.push(options);
     },
     pauseAuto: async (
       _c?: unknown,
@@ -278,6 +286,11 @@ test("dirty overlap: preflight stops before merge and postflight restore", async
     log.stopAutoCalls[0] ?? "",
     /Pre-merge dirty working tree overlaps milestone M002/,
   );
+  assert.equal(
+    log.stopAutoOptions[0]?.preserveCompletedMilestoneBranch,
+    true,
+    "stopAuto cleanup must preserve the branch instead of merging after preflight blocks",
+  );
 });
 
 test("unmerged conflicts: preflight stops before merge and postflight restore", async () => {
@@ -299,6 +312,11 @@ test("unmerged conflicts: preflight stops before merge and postflight restore", 
   assert.match(
     log.stopAutoCalls[0] ?? "",
     /Pre-merge unresolved Git conflicts block milestone M002/,
+  );
+  assert.equal(
+    log.stopAutoOptions[0]?.preserveCompletedMilestoneBranch,
+    true,
+    "stopAuto cleanup must preserve the branch instead of merging after preflight blocks",
   );
 });
 

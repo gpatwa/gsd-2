@@ -1381,6 +1381,7 @@ export async function stopAuto(
           currentMilestoneId: s.currentMilestoneId,
           milestoneComplete,
           milestoneMergedInPhases: s.milestoneMergedInPhases,
+          preserveCompletedMilestoneBranch: options.preserveCompletedMilestoneBranch,
         });
 
         if (exitAction === "merge") {
@@ -1682,8 +1683,10 @@ export function _selectStopAutoWorktreeExit(args: {
   currentMilestoneId: string | null;
   milestoneComplete: boolean;
   milestoneMergedInPhases: boolean;
+  preserveCompletedMilestoneBranch?: boolean;
 }): StopAutoWorktreeExitAction {
   if (!args.currentMilestoneId || args.milestoneMergedInPhases) return "none";
+  if (args.milestoneComplete && args.preserveCompletedMilestoneBranch) return "preserve";
   return args.milestoneComplete ? "merge" : "preserve";
 }
 

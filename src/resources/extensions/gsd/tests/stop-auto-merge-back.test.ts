@@ -46,6 +46,18 @@ test("#5576: stopAuto does not merge a milestone already merged in phases", () =
   );
 });
 
+test("stopAuto preserves a complete milestone when merge cleanup is explicitly suppressed", () => {
+  assert.equal(
+    _selectStopAutoWorktreeExit({
+      currentMilestoneId: "M001",
+      milestoneComplete: true,
+      milestoneMergedInPhases: false,
+      preserveCompletedMilestoneBranch: true,
+    }),
+    "preserve",
+  );
+});
+
 test("#5576: stopAuto skips worktree teardown when no milestone is active", () => {
   assert.equal(
     _selectStopAutoWorktreeExit({
