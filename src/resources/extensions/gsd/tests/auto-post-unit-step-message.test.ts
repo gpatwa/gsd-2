@@ -25,11 +25,9 @@ function makeState(overrides: Partial<GSDState>): GSDState {
   };
 }
 
-test("buildStepCompleteMessage: milestone complete surfaces review guidance", () => {
+test("buildStepCompleteMessage: terminal milestone completion leaves the roll-up as the only closeout message", () => {
   const msg = buildStepCompleteMessage(makeState({ phase: "complete" }));
-  assert.match(msg, /milestone finished/);
-  assert.match(msg, /\/gsd status/);
-  assert.doesNotMatch(msg, /Next:/);
+  assert.equal(msg, null);
 });
 
 test("buildStepCompleteMessage: mid-flight step includes next unit label and /gsd next hint", () => {
@@ -39,6 +37,7 @@ test("buildStepCompleteMessage: mid-flight step includes next unit label and /gs
     activeTask: { id: "T03", title: "Wire notify" },
   });
   const msg = buildStepCompleteMessage(state);
+  assert.ok(msg);
   assert.match(msg, /Next: Execute T03: Wire notify/);
   assert.doesNotMatch(msg, /\/clear/);
   assert.match(msg, /\/gsd next to continue one step/);
@@ -48,6 +47,7 @@ test("buildStepCompleteMessage: unknown phase falls back to generic continue lab
   // Cast to bypass Phase union so we exercise the default branch of describeNextUnit.
   const state = makeState({ phase: "totally-unknown" as unknown as GSDState["phase"] });
   const msg = buildStepCompleteMessage(state);
+  assert.ok(msg);
   assert.match(msg, /Next: Continue/);
   assert.doesNotMatch(msg, /\/clear/);
 });

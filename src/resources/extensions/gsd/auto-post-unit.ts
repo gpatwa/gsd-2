@@ -484,9 +484,9 @@ export const MAX_ARTIFACT_VERIFICATION_RETRIES = 3;
 export const STEP_COMPLETE_FALLBACK_MESSAGE =
   "Step complete. Run /gsd next to continue one step, or /gsd auto to run continuously.";
 
-export function buildStepCompleteMessage(nextState: import("./types.js").GSDState): string {
+export function buildStepCompleteMessage(nextState: import("./types.js").GSDState): string | null {
   if (nextState.phase === "complete") {
-    return "Step complete — milestone finished. Run /gsd status to review, or start the next milestone.";
+    return null;
   }
   const next = describeNextUnit(nextState);
   return `Step complete. Next: ${next.label}\n`
@@ -1967,7 +1967,8 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
     try {
       const nextState = await deriveState(s.canonicalProjectRoot);
       phaseAfterUnit = nextState.phase;
-      ctx.ui.notify(buildStepCompleteMessage(nextState), "info");
+      const message = buildStepCompleteMessage(nextState);
+      if (message) ctx.ui.notify(message, "info");
     } catch (e) {
       debugLog("postUnit", { phase: "step-wizard-notify", error: String(e) });
       ctx.ui.notify(STEP_COMPLETE_FALLBACK_MESSAGE, "info");

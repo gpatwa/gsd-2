@@ -1000,7 +1000,9 @@ export function setCompletionProgressWidget(
   snapshot: CompletionDashboardSnapshot,
 ): void {
   if (!ctx.hasUI) return;
-  ctx.ui.setWidget("gsd-outcome", undefined);
+  const widgetKey = snapshot.allMilestonesComplete ? "gsd-outcome" : "gsd-progress";
+  const clearedWidgetKey = snapshot.allMilestonesComplete ? "gsd-progress" : "gsd-outcome";
+  ctx.ui.setWidget(clearedWidgetKey, undefined);
 
   if (typeof ctx.ui?.setHeader === "function") {
     ctx.ui.setHeader(() => ({
@@ -1012,7 +1014,7 @@ export function setCompletionProgressWidget(
     ctx.ui.setStatus("gsd-step", undefined);
   }
 
-  ctx.ui.setWidget("gsd-progress", (_tui, theme) => ({
+  ctx.ui.setWidget(widgetKey, (_tui, theme) => ({
     render(width: number): string[] {
       const ui = makeUI(theme, width);
       const pad = INDENT.base;

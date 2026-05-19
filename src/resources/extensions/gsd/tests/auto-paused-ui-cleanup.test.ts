@@ -604,3 +604,67 @@ test("stopAuto completion closeout reroots session, restores cwd, and preserves 
     rmSync(base, { recursive: true, force: true });
   }
 });
+
+test("stopAuto all-complete closeout clears active progress and leaves final outcome", async () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-all-complete-closeout-"));
+  const previousCwd = process.cwd();
+  const widgetCalls: Array<[string, unknown]> = [];
+
+  autoSession.reset();
+  openDatabase(join(base, "gsd-test.db"));
+  insertMilestone({ id: "M007", title: "Live Text Search", status: "complete" });
+  insertSlice({ id: "S01", milestoneId: "M007", title: "Complete slice", status: "complete", sequence: 1 });
+
+  autoSession.active = true;
+  autoSession.paused = false;
+  autoSession.basePath = join(base, ".gsd", "worktrees", "M007");
+  autoSession.originalBasePath = base;
+  autoSession.currentMilestoneId = "M007";
+  autoSession.autoStartTime = Date.now() - 60_000;
+  autoSession.cmdCtx = {
+    newSession: async () => ({ cancelled: false }),
+    sessionManager: { getEntries: () => [] },
+    getContextUsage: () => ({ percent: 0.1, contextWindow: 1_000_000 }),
+    model: { contextWindow: 1_000_000 },
+  } as any;
+
+  try {
+    await stopAuto(
+      {
+        hasUI: true,
+        ui: {
+          setStatus: () => {},
+          setWidget: (key: string, value: unknown) => {
+            widgetCalls.push([key, value]);
+          },
+          setHeader: () => {},
+          notify: () => {},
+        },
+        modelRegistry: { find: () => null },
+      } as any,
+      { events: { emit: () => {} } } as any,
+      "All milestones complete",
+      {
+        completionWidget: {
+          milestoneId: "M007",
+          milestoneTitle: "Live Text Search",
+          allMilestonesComplete: true,
+        },
+      },
+    );
+
+    assert.ok(
+      widgetCalls.some(([key, value]) => key === "gsd-progress" && value === undefined),
+      "all-complete closeout must clear the stale active progress widget",
+    );
+    const finalProgress = widgetCalls.filter(([key]) => key === "gsd-progress").at(-1);
+    assert.equal(finalProgress?.[1], undefined, "all-complete closeout must not reinstall active progress");
+    const finalOutcome = widgetCalls.filter(([key]) => key === "gsd-outcome").at(-1);
+    assert.equal(typeof finalOutcome?.[1], "function", "all-complete closeout must install the final outcome widget");
+  } finally {
+    try { closeDatabase(); } catch { /* noop */ }
+    autoSession.reset();
+    process.chdir(previousCwd);
+    rmSync(base, { recursive: true, force: true });
+  }
+});

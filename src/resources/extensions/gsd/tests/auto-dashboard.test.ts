@@ -16,6 +16,7 @@ import {
   buildPhaseHandoffOutcome,
   updateProgressWidget,
   setAutoOutcomeWidget,
+  setCompletionProgressWidget,
   getRoadmapSlicesSync,
   clearSliceProgressCache,
   getWidgetMode,
@@ -280,6 +281,52 @@ test("setAutoOutcomeWidget renders a durable next-action handoff", () => {
   assert.match(output, /Paused by user request/);
   assert.match(output, /researching M005\/S01/);
   assert.match(output, /\/gsd auto/);
+});
+
+test("setCompletionProgressWidget uses the outcome slot for terminal all-complete handoff", () => {
+  const calls: Array<[string, unknown]> = [];
+  setCompletionProgressWidget(
+    {
+      hasUI: true,
+      ui: {
+        setWidget(key: string, factory: unknown) {
+          calls.push([key, factory]);
+        },
+        setHeader() {},
+        setStatus() {},
+      },
+    } as any,
+    {
+      milestoneId: "M007",
+      milestoneTitle: "Live Text Search",
+      oneLiner: "Completed the milestone.",
+      reason: "All milestones complete",
+      startedAt: Date.now() - 2_000,
+      totalCost: 31.06,
+      totalTokens: 3_600_000,
+      unitCount: 78,
+      completedSlices: 1,
+      totalSlices: 1,
+      allMilestonesComplete: true,
+      basePath: "/project/root",
+    },
+  );
+
+  assert.ok(
+    calls.some(([key, value]) => key === "gsd-progress" && value === undefined),
+    "terminal completion must clear the active progress widget",
+  );
+  const outcome = calls.filter(([key]) => key === "gsd-outcome").at(-1);
+  assert.equal(typeof outcome?.[1], "function", "terminal completion must install the final handoff in the outcome slot");
+
+  const component = (outcome?.[1] as any)(
+    { requestRender() {} },
+    { fg: (_color: string, text: string) => text, bold: (text: string) => text },
+  );
+  const output = component.render(120).join("\n");
+  assert.match(output, /All milestones complete/);
+  assert.match(output, /Review the roll-up/);
+  assert.doesNotMatch(output, /\/gsd auto to resume/);
 });
 
 test("buildPhaseHandoffOutcome summarizes the last phase result", () => {
