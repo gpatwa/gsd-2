@@ -52,6 +52,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd prefs          Manage preferences (alias for /gsd setup prefs)",
     "  /gsd keys           API key manager (LLM + tool keys)",
     "  /gsd doctor         Diagnose and repair .gsd/ state",
+    "  /gsd closeout       Recover failed git closeout actions",
     "",
     "Use /gsd help full for the complete command reference.",
   ];
@@ -138,6 +139,7 @@ export function showHelp(ctx: ExtensionCommandContext, args = ""): void {
     "  /gsd forensics      Examine execution logs and post-mortem analysis",
     "  /gsd export         Export milestone/slice results  [--json|--markdown|--html] [--all]",
     "  /gsd cleanup        Remove merged branches or snapshots  [branches|snapshots]",
+    "  /gsd closeout       Recover failed git closeout actions  [status|retry|resolve] [unit-id]",
     "  /gsd worktree       Manage worktrees from the TUI  [list|merge|clean|remove]",
     "  /gsd migrate        Migrate .planning/ (v1) to .gsd/ (v2) format",
     "  /gsd remote         Control remote auto-mode  [slack|discord|status|disconnect]",

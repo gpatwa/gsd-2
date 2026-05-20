@@ -28,7 +28,7 @@ import { migrateToExternalState, recoverFailedMigration } from "./migrate-extern
 import { collectSecretsFromManifest } from "../get-secrets-from-user.js";
 import { gsdRoot, resolveMilestoneFile } from "./paths.js";
 import { invalidateAllCaches } from "./cache.js";
-import { writeLock, clearLock } from "./crash-recovery.js";
+import { writeLock, clearLock, readCrashLock, isLockProcessAlive } from "./crash-recovery.js";
 import {
   acquireSessionLock,
   releaseSessionLock,
@@ -64,10 +64,11 @@ import { initRoutingHistory } from "./routing-history.js";
 import { restoreHookState, resetHookState } from "./post-unit-hooks.js";
 import { resetProactiveHealing, setLevelChangeCallback } from "./doctor-proactive.js";
 import { snapshotSkills } from "./skill-discovery.js";
-import { isDbAvailable, getMilestone, getAllMilestones, openDatabase, getDbStatus } from "./gsd-db.js";
+import { isDbAvailable, getMilestone, getAllMilestones, insertMilestone, openDatabase, getDbStatus } from "./gsd-db.js";
 import { isClosedStatus } from "./status-guards.js";
 import { classifyMilestoneSummaryContent } from "./milestone-summary-classifier.js";
 import { auditOrphanedPreflightStashes } from "./orphan-stash-audit.js";
+import { parseProject } from "./schemas/parsers.js";
 
 import {
   debugLog,
@@ -149,6 +150,38 @@ export async function openProjectDbIfPresent(basePath: string): Promise<void> {
     openDatabase(gsdDbPath);
   } catch (err) {
     logWarning("engine", `gsd-db: failed to open existing database: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+export function reconcileProjectMilestonesFromDisk(basePath: string): number {
+  if (!isDbAvailable()) return 0;
+  const projectPath = join(basePath, ".gsd", "PROJECT.md");
+  if (!existsSync(projectPath)) return 0;
+
+  try {
+    const content = readFileSync(projectPath, "utf-8");
+    const parsed = parseProject(content);
+    if (parsed.milestones.length === 0) return 0;
+
+    const dbMilestones = new Set(getAllMilestones().map((m) => m.id));
+    let inserted = 0;
+    for (const milestone of parsed.milestones) {
+      if (dbMilestones.has(milestone.id)) continue;
+      insertMilestone({
+        id: milestone.id,
+        title: milestone.title,
+        status: milestone.done ? "complete" : "queued",
+      });
+      dbMilestones.add(milestone.id);
+      inserted += 1;
+    }
+    return inserted;
+  } catch (err) {
+    logWarning(
+      "bootstrap",
+      `PROJECT milestone reconciliation failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 0;
   }
 }
 
@@ -620,6 +653,12 @@ export async function bootstrapAutoSession(
     return false;
   }
 
+  const startupLock = readCrashLock(base);
+  if (startupLock && !isLockProcessAlive(startupLock)) {
+    clearLock(base);
+    ctx.ui.notify("Cleared stale auto-mode worker state.", "info");
+  }
+
   const lockResult = acquireSessionLock(base);
   if (!lockResult.acquired) {
     ctx.ui.notify(lockResult.reason, "error");
@@ -800,6 +839,7 @@ export async function bootstrapAutoSession(
     // only have a failure-path SUMMARY on disk (#4663).
     await openProjectDbIfPresent(base);
     registerAutoWorkerForSession(base);
+    reconcileProjectMilestonesFromDisk(base);
 
     // Clean stale runtime unit files for completed milestones (#887).
     // DB-authoritative: when DB is available, require DB status to be closed
@@ -827,6 +867,7 @@ export async function bootstrapAutoSession(
     // Catches completed milestones whose teardown (merge + branch delete)
     // was lost due to session ending between completion and teardown.
     // Must run after DB open and before worktree entry.
+    let orphanAuditRecovered = false;
     try {
       const auditResult = auditOrphanedMilestoneBranches(base, getIsolationMode(base));
       for (const msg of auditResult.recovered) {
@@ -836,6 +877,7 @@ export async function bootstrapAutoSession(
         ctx.ui.notify(`Orphan audit: ${msg}`, "warning");
       }
       if (auditResult.recovered.length > 0) {
+        orphanAuditRecovered = true;
         debugLog("orphan-audit", { recovered: auditResult.recovered, warnings: auditResult.warnings });
       }
     } catch (err) {
@@ -877,6 +919,19 @@ export async function bootstrapAutoSession(
     }
 
     let state = await deriveState(base);
+
+    if (
+      process.env.GSD_HEADLESS === "1" &&
+      orphanAuditRecovered &&
+      !state.activeMilestone &&
+      state.phase === "complete"
+    ) {
+      ctx.ui.notify(
+        "Auto-mode stopped (Recovered completed milestone cleanup; all milestones complete).",
+        "info",
+      );
+      return releaseLockAndReturn();
+    }
 
     // Stale worktree state recovery (#654)
     if (
@@ -952,12 +1007,14 @@ export async function bootstrapAutoSession(
     // hasSurvivorBranch after a successful promotion.
     if (decideSurvivorAction(hasSurvivorBranch, state.phase) === "finalize") {
       const mid = survivorMilestoneId!;
+      const lifecycle = buildLifecycle();
+      lifecycle.adoptSessionRoot(base);
       // Commit 68ef58a3c made `_mergeBranchMode` throw on wrong-branch
       // instead of returning false silently. Wrap the call so the throw is
       // converted into an error notify + clean bootstrap abort, not an
       // unhandled exception propagating to the slash-command caller (#5549
       // post-merge audit, R2).
-      const finalize = _finalizeSurvivorBranch(buildLifecycle(), mid, ctx.ui);
+      const finalize = _finalizeSurvivorBranch(lifecycle, mid, ctx.ui);
       if (!finalize.merged) {
         return releaseLockAndReturn();
       }
@@ -1214,6 +1271,11 @@ export async function bootstrapAutoSession(
         } else if (enterResult.reason === "creation-failed") {
           ctx.ui.notify(
             `Cannot enter milestone ${s.currentMilestoneId}: worktree/branch creation failed. Isolation is degraded.`,
+            "error",
+          );
+        } else if (enterResult.reason === "isolation-degraded") {
+          ctx.ui.notify(
+            `Cannot enter milestone ${s.currentMilestoneId}: isolation is degraded from a prior worktree failure. Close processes locking the worktree and retry, or run /gsd doctor fix.`,
             "error",
           );
         } else if (enterResult.reason === "invalid-milestone-id") {

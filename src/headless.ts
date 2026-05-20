@@ -281,7 +281,7 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   const isAutoMode = options.command === 'auto'
   // discuss and plan are multi-turn: they involve multiple question rounds,
   // codebase scanning, and artifact writing before the workflow completes (#3547).
-  const isMultiTurnCommand = isMultiTurnHeadlessCommand(options.command)
+  let isMultiTurnCommand = isMultiTurnHeadlessCommand(options.command)
   if (isAutoMode && options.timeout === 300_000) {
     options.timeout = 0
   }
@@ -900,9 +900,14 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
   if (internalProcess) {
     internalProcess.on('exit', (code: number | null) => {
       if (!completed) {
-        const msg = `[headless] Child process exited unexpectedly with code ${code ?? 'null'}\n`
-        process.stderr.write(msg)
-        exitCode = EXIT_ERROR
+        if (code === 0) {
+          process.stderr.write('[headless] Child exited cleanly (code 0) without terminal notification\n')
+          exitCode = EXIT_SUCCESS
+        } else {
+          const msg = `[headless] Child process exited unexpectedly with code ${code ?? 'null'}\n`
+          process.stderr.write(msg)
+          exitCode = EXIT_ERROR
+        }
         resolveCompletion()
       }
     })
@@ -938,6 +943,7 @@ async function runHeadlessOnce(options: HeadlessOptions, restartCount: number): 
     completed = false
     milestoneReady = false
     blocked = false
+    isMultiTurnCommand = true
     effectiveIdleTimeout = 0
     resetIdleTimer()
     const autoCompletionPromise = new Promise<void>((resolve) => {

@@ -147,6 +147,14 @@ Setting `prefer_skills: []` does **not** disable skill discovery — it just mea
 
 - `unique_milestone_ids`: boolean — when `true`, generates milestone IDs in `M{seq}-{rand6}` format (e.g. `M001-eh88as`) instead of plain sequential `M001`. Prevents ID collisions in team workflows where multiple contributors create milestones concurrently. Both formats coexist — existing `M001`-style milestones remain valid. Default: `false`.
 
+- `workspace`: optional parent-workspace repository registry. Keys:
+  - `mode`: `"project"` or `"parent"` — registry mode for repository lookup. Default: `"project"`.
+  - `repositories`: object keyed by repository id. A default `"project"` repository pointing at the project root is always available, even when not listed here (and can be overridden by explicitly defining `"project"`). Each repository supports:
+    - `path`: string — repository root path relative to project root.
+    - `role`: string — optional human label for prompts/reporting.
+    - `verification`: string[] — optional default verification commands.
+    - `commit_policy`: `"auto"` or `"skip"` — optional turn-commit policy for auto-mode commit actions. Defaults to `"auto"` when omitted. `"skip"` suppresses commit execution for that target repo.
+
 - `budget_ceiling`: number — maximum dollar amount to spend on auto-mode. When reached, behavior is controlled by `budget_enforcement`. Default: no limit.
 
 - `budget_enforcement`: `"warn"`, `"pause"`, or `"halt"` — action taken when `budget_ceiling` is reached.
@@ -186,6 +194,7 @@ Setting `prefer_skills: []` does **not** disable skill discovery — it just mea
   - `on_budget`: boolean — notify when budget thresholds are reached. Default: `true`.
   - `on_milestone`: boolean — notify when a milestone finishes. Default: `true`.
   - `on_attention`: boolean — notify when manual attention is needed. Default: `true`.
+  - Terminal auto-loop errors persist an `activity/*-auto-crash-note.json` file with error/session metadata; when available, the error notification includes the crash-note path and instructs resuming with `/gsd auto`.
 
 - `cmux`: configures cmux terminal integration when GSD is running inside a cmux workspace. Keys:
   - `enabled`: boolean — master toggle for cmux integration. Default: `false`.
@@ -221,7 +230,7 @@ Setting `prefer_skills: []` does **not** disable skill discovery — it just mea
 - `context_management`: configures context hygiene for auto-mode sessions. Keys:
   - `observation_masking`: boolean — mask old tool results to reduce context bloat. Default: `true`.
   - `observation_mask_turns`: number — keep this many recent turns verbatim (1-50). Default: `8`.
-  - `compaction_threshold_percent`: number — trigger compaction at this % of context window (0.5-0.95). Lower values fire compaction earlier, reducing drift. Default: `0.70`.
+  - `compaction_threshold_percent`: number — trigger compaction at this % of context window (0.5-0.95). Lower values fire compaction earlier, reducing drift. Default: `0.60`.
   - `tool_result_max_chars`: number — max chars per tool result in GSD sessions (200-10000). Default: `800`.
 
 - `auto_visualize`: boolean — show a visualizer hint after each milestone completion in auto-mode. Default: `false`.
@@ -240,11 +249,23 @@ Setting `prefer_skills: []` does **not** disable skill discovery — it just mea
   - `auto_merge`: `"auto"`, `"confirm"`, or `"manual"` — merge behavior after completion. `"auto"` merges immediately; `"confirm"` asks first; `"manual"` leaves branches for you. Default: `"confirm"`.
   - `worker_model`: string — optional model override for parallel milestone workers. When set, workers use this model (e.g. `"claude-haiku-4-5"`) instead of inheriting the coordinator's model. Useful for cost savings on execution-heavy milestones.
 
+- `workspace`: repository-scoping for parent/multi-repo workspaces. Keys:
+  - `mode`: `"project"` | `"parent"` — enables single-repo (default) or parent workspace behavior.
+  - `repositories`: map of repository IDs to repository config:
+    - `path`: string (required) — path relative to project root.
+    - `role`: string (optional) — informational role label.
+    - `verification`: string[] (optional) — repository-specific verification commands used when global `verification_commands` is not set.
+    - `commit_policy`: `"auto"` | `"skip"` (optional) — per-repository closeout commit behavior.
+  - `project` is always an implicit repository target mapped to the project root for backward compatibility.
+  - Plan/task `targetRepositories` defaults to `["project"]` when omitted.
+
 - `verification_commands`: string[] — shell commands to run as verification after task execution (e.g., `["npm test", "npm run lint"]`). Commands run in order; if any fails, the task is marked as needing fixes.
 
 - `verification_auto_fix`: boolean — when `true`, automatically attempt to fix verification failures instead of just reporting them. Default: `false`.
 
 - `verification_max_retries`: number — maximum number of fix-and-retry cycles for verification failures. Default: `0` (no retries).
+
+- `per_unit_cost_cap_usd`: number — per-unit retry cost ceiling in USD for verification retries. Must be a positive finite number when set; invalid values are rejected during preference validation. Default: `5.0`. During auto-verification and artifact-retry flows, auto-mode pauses when the current unit reaches this cap or when current unit cost spikes to at least `3.0x` the rolling average.
 
 - `uat_dispatch`: boolean — when `true`, enables UAT (User Acceptance Testing) dispatch mode. Default: `false`.
 

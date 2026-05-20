@@ -15,18 +15,27 @@ import assert from "node:assert/strict";
 
 // ─── Extracted detection logic (mirrors headless.ts) ────────────────────────
 
-const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped']
+const PAUSED_PREFIXES = ['auto-mode paused', 'step-mode paused']
+const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped', ...PAUSED_PREFIXES]
+
+function isManualResolutionNotification(message: string): boolean {
+  return (
+    message.includes('resolve manually and re-run /gsd auto') ||
+    message.includes('resolve conflicts manually and run /gsd auto to resume') ||
+    message.includes('resolve and run /gsd auto to resume')
+  )
+}
 
 function isTerminalNotification(event: Record<string, unknown>): boolean {
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix))
+  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 function isBlockedNotification(event: Record<string, unknown>): boolean {
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return message.includes('blocked:')
+  return message.includes('blocked:') || PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 const QUICK_COMMANDS = new Set([
@@ -69,6 +78,18 @@ test("detects 'Step-mode stopped.' as terminal", () => {
   assert.ok(isTerminalNotification(makeNotify("Step-mode stopped.")))
 })
 
+test("detects 'Auto-mode paused.' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify("Auto-mode paused (Escape). Type to interact, or /gsd auto to resume.")))
+})
+
+test("detects 'Step-mode paused.' as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify("Step-mode paused (Escape). Type to interact, or /gsd next to resume.")))
+})
+
+test("detects manual merge-resolution notification as terminal", () => {
+  assert.ok(isTerminalNotification(makeNotify("Survivor-branch finalization for M001 failed: merge conflict. Resolve manually and re-run /gsd auto.")))
+})
+
 // ─── False positives that previously triggered early exit (#879) ────────────
 
 test("does NOT match 'All slices are complete — nothing to discuss.'", () => {
@@ -108,6 +129,15 @@ test("detects blocked notification with 'Blocked:' prefix", () => {
 
 test("detects inline 'Blocked:' message", () => {
   assert.ok(isBlockedNotification(makeNotify("Blocked: no active milestone. Fix and run /gsd auto.")))
+})
+
+test("detects pause notifications as blocked in headless mode", () => {
+  assert.ok(isBlockedNotification(makeNotify("Auto-mode paused due to provider error: connection reset")))
+})
+
+test("detects manual merge-resolution notifications as blocked", () => {
+  assert.ok(isBlockedNotification(makeNotify("Merge conflict on milestone M001: src/conflict.js. Resolve conflicts manually and run /gsd auto to resume.")))
+  assert.ok(isBlockedNotification(makeNotify("Merge error on milestone M001: remote rejected push. Resolve and run /gsd auto to resume.")))
 })
 
 test("does NOT match 'blocked' without colon (avoids false positives)", () => {

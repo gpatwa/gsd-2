@@ -14,19 +14,22 @@ import assert from 'node:assert/strict'
 const EXIT_SUCCESS = 0
 const EXIT_ERROR = 1
 const EXIT_BLOCKED = 10
+const EXIT_CANCELLED = 11
 
 function mapStatusToExitCode(status: string): number {
   switch (status) {
     case 'success':
     case 'complete':
+    case 'completed':
       return EXIT_SUCCESS
     case 'error':
     case 'timeout':
       return EXIT_ERROR
     case 'blocked':
+    case 'paused':
       return EXIT_BLOCKED
     case 'cancelled':
-      return 11
+      return EXIT_CANCELLED
     default:
       return EXIT_ERROR
   }
@@ -34,18 +37,27 @@ function mapStatusToExitCode(status: string): number {
 
 // ─── Extracted terminal detection (mirrors headless-events.ts) ──────────────
 
-const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped']
+const PAUSED_PREFIXES = ['auto-mode paused', 'step-mode paused']
+const TERMINAL_PREFIXES = ['auto-mode stopped', 'step-mode stopped', ...PAUSED_PREFIXES]
+
+function isManualResolutionNotification(message: string): boolean {
+  return (
+    message.includes('resolve manually and re-run /gsd auto') ||
+    message.includes('resolve conflicts manually and run /gsd auto to resume') ||
+    message.includes('resolve and run /gsd auto to resume')
+  )
+}
 
 function isTerminalNotification(event: Record<string, unknown>): boolean {
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix))
+  return TERMINAL_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 function isBlockedNotification(event: Record<string, unknown>): boolean {
   if (event.type !== 'extension_ui_request' || event.method !== 'notify') return false
   const message = String(event.message ?? '').toLowerCase()
-  return message.includes('blocked:')
+  return message.includes('blocked:') || PAUSED_PREFIXES.some((prefix) => message.startsWith(prefix)) || isManualResolutionNotification(message)
 }
 
 // ─── Mock RpcClient ─────────────────────────────────────────────────────────
@@ -95,12 +107,20 @@ function handleExtensionUIRequest(
   switch (method) {
     case 'select': {
       const title = String(event.title ?? '')
-      let selected = event.options?.[0] ?? ''
-      if (title.includes('Auto-mode is running') && event.options) {
-        const forceOption = event.options.find(o => o.toLowerCase().includes('force start'))
-        if (forceOption) selected = forceOption
+      const options = event.options ?? []
+      if (title.includes('Auto-mode is running')) {
+        const forceOption = options.find(o => o.toLowerCase().includes('force start'))
+        if (forceOption) {
+          client.sendUIResponse(id, { value: forceOption })
+          break
+        }
       }
-      client.sendUIResponse(id, { value: selected })
+      const safeOption = options.find(o => /\b(not yet|cancel|skip|exit|abort)\b/i.test(o))
+      if (safeOption) {
+        client.sendUIResponse(id, { value: safeOption })
+        break
+      }
+      client.sendUIResponse(id, { cancelled: true })
       break
     }
     case 'confirm':
@@ -170,6 +190,12 @@ function handleEvent(
   }
 }
 
+function handleChildExitWithoutTerminalNotification(code: number | null, state: EventHandlerState): void {
+  if (state.completed) return
+  state.completed = true
+  state.exitCode = code === 0 ? EXIT_SUCCESS : EXIT_ERROR
+}
+
 // ─── execution_complete event handling ──────────────────────────────────────
 
 test('execution_complete with status success triggers completion with EXIT_SUCCESS', () => {
@@ -224,6 +250,33 @@ test('execution_complete ignored if already completed', () => {
   assert.equal(state.exitCode, EXIT_SUCCESS)
 })
 
+test('clean child exit without terminal notification is treated as success', () => {
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: true }
+
+  handleChildExitWithoutTerminalNotification(0, state)
+
+  assert.equal(state.completed, true)
+  assert.equal(state.exitCode, EXIT_SUCCESS)
+})
+
+test('nonzero child exit without terminal notification remains an error', () => {
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: true }
+
+  handleChildExitWithoutTerminalNotification(1, state)
+
+  assert.equal(state.completed, true)
+  assert.equal(state.exitCode, EXIT_ERROR)
+})
+
+test('null child exit without terminal notification remains an error', () => {
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: true }
+
+  handleChildExitWithoutTerminalNotification(null, state)
+
+  assert.equal(state.completed, true)
+  assert.equal(state.exitCode, EXIT_ERROR)
+})
+
 // ─── v1 string-matching fallback ────────────────────────────────────────────
 
 test('v1 fallback: terminal notification still triggers completion', () => {
@@ -255,6 +308,36 @@ test('v1 fallback: blocked notification sets blocked flag', () => {
   assert.equal(state.exitCode, EXIT_BLOCKED)
 })
 
+test('v1 fallback: pause notification sets blocked flag', () => {
+  const client = new MockRpcClient()
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: false }
+
+  handleEvent(
+    { type: 'extension_ui_request', method: 'notify', id: 'n1', message: 'Auto-mode paused due to provider error: invalid api key' },
+    state,
+    client,
+  )
+
+  assert.equal(state.completed, true)
+  assert.equal(state.blocked, true)
+  assert.equal(state.exitCode, EXIT_BLOCKED)
+})
+
+test('v1 fallback: manual merge-resolution notification exits blocked', () => {
+  const client = new MockRpcClient()
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: false }
+
+  handleEvent(
+    { type: 'extension_ui_request', method: 'notify', id: 'n1', message: 'Survivor-branch finalization for M001 failed: merge conflict. Resolve manually and re-run /gsd auto.' },
+    state,
+    client,
+  )
+
+  assert.equal(state.completed, true)
+  assert.equal(state.blocked, true)
+  assert.equal(state.exitCode, EXIT_BLOCKED)
+})
+
 test('string-matching fallback works when execution_complete never received', () => {
   const client = new MockRpcClient()
   const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: false }
@@ -274,7 +357,7 @@ test('string-matching fallback works when execution_complete never received', ()
 
 // ─── handleExtensionUIRequest uses client.sendUIResponse ────────────────────
 
-test('handleExtensionUIRequest select calls sendUIResponse with value', () => {
+test('handleExtensionUIRequest select cancels when no safe option exists', () => {
   const client = new MockRpcClient()
 
   handleExtensionUIRequest(
@@ -284,7 +367,44 @@ test('handleExtensionUIRequest select calls sendUIResponse with value', () => {
 
   assert.equal(client.sendUICalls.length, 1)
   assert.equal(client.sendUICalls[0].id, 'sel1')
-  assert.equal(client.sendUICalls[0].response.value, 'option-a')
+  assert.equal(client.sendUICalls[0].response.cancelled, true)
+})
+
+test('handleExtensionUIRequest select prefers safe option when present', () => {
+  const client = new MockRpcClient()
+
+  handleExtensionUIRequest(
+    {
+      type: 'extension_ui_request',
+      id: 'sel-safe',
+      method: 'select',
+      options: ['Quick task (recommended)', 'Not yet: Run /gsd when ready.'],
+    },
+    client,
+  )
+
+  assert.equal(client.sendUICalls.length, 1)
+  assert.equal(client.sendUICalls[0].id, 'sel-safe')
+  assert.equal(client.sendUICalls[0].response.value, 'Not yet: Run /gsd when ready.')
+})
+
+test('handleExtensionUIRequest select prefers force start when Auto-mode is running', () => {
+  const client = new MockRpcClient()
+
+  handleExtensionUIRequest(
+    {
+      type: 'extension_ui_request',
+      id: 'sel-force',
+      method: 'select',
+      title: 'Auto-mode is running — another command is already executing',
+      options: ['View status', 'Force start anyway', 'Cancel'],
+    },
+    client,
+  )
+
+  assert.equal(client.sendUICalls.length, 1)
+  assert.equal(client.sendUICalls[0].id, 'sel-force')
+  assert.equal(client.sendUICalls[0].response.value, 'Force start anyway')
 })
 
 test('handleExtensionUIRequest confirm calls sendUIResponse with confirmed', () => {
@@ -501,6 +621,25 @@ test('multi-turn commands still complete via terminal notification', () => {
     client,
   )
   assert.equal(state.completed, true, 'terminal notification should trigger completion')
+  assert.equal(state.exitCode, EXIT_SUCCESS)
+})
+
+test('new-milestone auto phase ignores execution_complete until terminal notification', () => {
+  const client = new MockRpcClient()
+  const state: EventHandlerState = { completed: false, blocked: false, exitCode: -1, v2Enabled: true, isMultiTurnCommand: true }
+
+  handleEvent({ type: 'execution_complete', status: 'completed' }, state, client)
+
+  assert.equal(state.completed, false, 'auto-chained milestone execution must not stop after the first auto unit')
+  assert.equal(state.exitCode, -1)
+
+  handleEvent(
+    { type: 'extension_ui_request', method: 'notify', id: 'n1', message: 'Auto-mode stopped — milestone M001 complete' },
+    state,
+    client,
+  )
+
+  assert.equal(state.completed, true)
   assert.equal(state.exitCode, EXIT_SUCCESS)
 })
 
