@@ -207,6 +207,24 @@ test("writeLock stores the session_file in runtime_kv (worker scope)", (t) => {
   assert.equal(lock!.sessionFile, "/tmp/session-xyz.jsonl");
 });
 
+test("writeLock without session file clears stale worker session_file pointer", (t) => {
+  const base = makeBase();
+  t.after(() => cleanup(base));
+  openDatabase(join(base, ".gsd", "gsd.db"));
+  const projectRoot = normalizeRealPath(base);
+  const workerId = registerAutoWorker({ projectRootRealpath: projectRoot });
+
+  writeLock(base, "plan-slice", "M001/S01", "/tmp/session-stale.jsonl");
+  assert.equal(getRuntimeKv("worker", workerId, "session_file"), "/tmp/session-stale.jsonl");
+
+  writeLock(base, "execute-task", "M001/S01/T01");
+  assert.equal(
+    getRuntimeKv("worker", workerId, "session_file"),
+    null,
+    "preliminary lock write must clear stale session_file pointer",
+  );
+});
+
 test("clearLock removes the session_file row for the active worker", (t) => {
   const base = makeBase();
   t.after(() => cleanup(base));
@@ -280,6 +298,10 @@ test("clearStaleWorkerLock crashes stale worker and cancels latest active dispat
   assert.ok(dispatch);
   assert.equal(dispatch!.status, "canceled");
   assert.equal(dispatch!.exit_reason, "crash-recovered");
+  const leaseRow = _getAdapter()!.prepare(
+    `SELECT status FROM milestone_leases WHERE fencing_token = :ft`,
+  ).get({ ":ft": lease.token }) as { status: string } | undefined;
+  assert.equal(leaseRow?.status, "released");
   assert.equal(getRuntimeKv("worker", workerId, "session_file"), null);
   assert.equal(readCrashLock(base), null);
 });
@@ -303,7 +325,7 @@ test("clearLock marks stale worker crashed and releases held milestone lease", (
 
   assert.equal(getAutoWorker(workerId)?.status, "crashed");
   const leaseRow = _getAdapter()!.prepare(
-    `SELECT status FROM milestone_leases WHERE milestone_id = :m`,
-  ).get({ ":m": "M001" }) as { status: string } | undefined;
+    `SELECT status FROM milestone_leases WHERE fencing_token = :ft`,
+  ).get({ ":ft": lease.token }) as { status: string } | undefined;
   assert.equal(leaseRow?.status, "released");
 });

@@ -27,6 +27,7 @@ import type { AutoOrchestrationModule } from "./contracts.js";
 import { resolveWorktreeProjectRoot } from "../worktree-root.js";
 import { normalizeRealPath } from "../paths.js";
 import type { MilestoneScope } from "../workspace.js";
+import type { RootDirtySnapshot } from "../root-write-leak-guard.js";
 
 // ─── Exported Types ──────────────────────────────────────────────────────────
 
@@ -53,6 +54,16 @@ export interface PendingVerificationRetry {
   unitId: string;
   failureContext: string;
   attempt: number;
+}
+
+export interface PendingOrchestrationDispatch {
+  unitType: string;
+  unitId: string;
+  prompt: string;
+  pauseAfterUatDispatch: boolean;
+  state: import("../types.js").GSDState;
+  mid: string | undefined;
+  midTitle: string | undefined;
 }
 
 /**
@@ -164,6 +175,7 @@ export class AutoSession {
   pendingVerificationRetry: PendingVerificationRetry | null = null;
   readonly verificationRetryCount = new Map<string, number>();
   readonly verificationRetryFailureHashes = new Map<string, string>();
+  readonly exhaustedVerificationUnits = new Set<string>();
   pausedSessionFile: string | null = null;
   pausedUnitType: string | null = null;
   pausedUnitId: string | null = null;
@@ -206,6 +218,8 @@ export class AutoSession {
   // ── Isolation degradation ────────────────────────────────────────────
   /** Set to true when worktree creation fails; prevents merge of nonexistent branch. */
   isolationDegraded = false;
+  /** Project-root dirty snapshot captured before an isolated worktree unit runs. */
+  rootWriteBaseline: RootDirtySnapshot | null = null;
 
   // ── Merge guard ──────────────────────────────────────────────────────
   /** Set to true after phases.ts successfully calls mergeAndExit, so that
@@ -245,6 +259,8 @@ export class AutoSession {
 
   // ── Orchestration seam ───────────────────────────────────────────────────
   orchestration: AutoOrchestrationModule | null = null;
+  pendingOrchestrationDispatch: PendingOrchestrationDispatch | null = null;
+  pendingVerificationRetryDispatch: PendingOrchestrationDispatch | null = null;
 
   // ── Loop promise state ──────────────────────────────────────────────────
   // Per-unit resolve function and session-switch guard live at module level
@@ -343,6 +359,7 @@ export class AutoSession {
     this.pendingVerificationRetry = null;
     this.verificationRetryCount.clear();
     this.verificationRetryFailureHashes.clear();
+    this.exhaustedVerificationUnits.clear();
     this.pausedSessionFile = null;
     this.pausedUnitType = null;
     this.pausedUnitId = null;
@@ -365,6 +382,7 @@ export class AutoSession {
     this.lastGitActionFailure = null;
     this.lastGitActionStatus = null;
     this.isolationDegraded = false;
+    this.rootWriteBaseline = null;
     this.milestoneMergedInPhases = false;
     this.milestoneStartShas = new Map();
     this.checkpointSha = null;
@@ -377,6 +395,8 @@ export class AutoSession {
 
     // Orchestration seam
     this.orchestration = null;
+    this.pendingOrchestrationDispatch = null;
+    this.pendingVerificationRetryDispatch = null;
 
     // Loop promise state lives in auto-loop.ts module scope
   }

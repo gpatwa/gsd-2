@@ -316,6 +316,36 @@ Continue from step 2.
     }
   });
 
+  test('needs-attention validation with all slices done → blocked', async () => {
+    const base = createFixtureBase();
+    try {
+      writeRoadmap(base, 'M001', `# M001: Needs Attention
+
+**Vision:** Test needs-attention phase.
+
+## Slices
+
+- [x] **S01: Done Slice** \`risk:low\` \`depends:[]\`
+  > After this: Done.
+`);
+
+      writeMilestoneValidation(base, 'M001', 'needs-attention');
+
+      const state = await deriveState(base);
+
+      assert.deepStrictEqual(state.phase, 'blocked', 'needs-attention: phase is blocked');
+      assert.deepStrictEqual(state.activeMilestone?.id, 'M001', 'needs-attention: activeMilestone is M001');
+      assert.deepStrictEqual(state.activeSlice, null, 'needs-attention: activeSlice is null');
+      assert.ok(
+        state.blockers.some(b => b.includes('needs-attention') && b.includes('/gsd park M001')),
+        'needs-attention: blocker explains explicit resolution paths',
+      );
+      assert.deepStrictEqual(state.registry[0]?.status, 'active', 'needs-attention: milestone remains active');
+    } finally {
+      cleanup(base);
+    }
+  });
+
   // ─── Test 7b: complete with active requirements → surfaces unmapped reqs ──
   test('complete with active requirements → surfaces unmapped reqs', async () => {
     const base = createFixtureBase();
