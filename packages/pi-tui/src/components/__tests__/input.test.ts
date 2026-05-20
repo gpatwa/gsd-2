@@ -37,16 +37,16 @@ describe("Input", () => {
 		const input = new Input();
 		input.secure = true;
 		input.focused = true;
-		const SECRET = "secret123";
-		input.handleInput(SECRET);
+		const hiddenText = "sample-hidden-value";
+		input.handleInput(hiddenText);
 
 		const line = input.render(40)[0] ?? "";
 		// Previous assertion was `line.includes("*********")` — a literal
-		// 9-star string that silently goes stale if SECRET is renamed to
+		// 9-star string that silently goes stale if the fixture is renamed to
 		// a different length (#4796). Match any run of asterisks and
-		// assert its length covers the secret.
+		// assert its length covers the hidden text.
 		assert.ok(
-			!line.includes(SECRET),
+			!line.includes(hiddenText),
 			"rendered line must not expose raw secret text",
 		);
 		const maskMatch = line.match(/\*+/);
@@ -55,8 +55,8 @@ describe("Input", () => {
 			`rendered line must include masked characters, got: ${JSON.stringify(line)}`,
 		);
 		assert.ok(
-			maskMatch[0].length >= SECRET.length,
-			`mask must cover at least the secret length (${SECRET.length}), got ${maskMatch[0].length} asterisks`,
+			maskMatch[0].length >= hiddenText.length,
+			`mask must cover at least the hidden text length (${hiddenText.length}), got ${maskMatch[0].length} asterisks`,
 		);
 	});
 
