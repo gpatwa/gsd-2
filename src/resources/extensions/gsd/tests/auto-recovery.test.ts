@@ -407,6 +407,47 @@ test("verifyExpectedArtifact detects roadmap [x] change despite parse cache", ()
   }
 });
 
+test("verifyExpectedArtifact accepts DB-complete slice when roadmap projection is stale", () => {
+  const base = makeTmpBase();
+  try {
+    openDatabase(join(base, ".gsd", "gsd.db"));
+    insertMilestone({ id: "M001", title: "Test Milestone", status: "active" });
+    insertSlice({
+      milestoneId: "M001",
+      id: "S01",
+      title: "Test Slice",
+      status: "complete",
+      risk: "low",
+      depends: [],
+    });
+
+    writeFileSync(
+      join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"),
+      "# M001: Test Milestone\n\n## Slices\n\n- [ ] **S01: Test Slice** `risk:low` `depends:[]`\n",
+      "utf-8",
+    );
+    writeFileSync(
+      join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-SUMMARY.md"),
+      "# S01 Summary\n\nDone.\n",
+      "utf-8",
+    );
+    writeFileSync(
+      join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-UAT.md"),
+      "# S01 UAT\n\nPassed.\n",
+      "utf-8",
+    );
+
+    assert.equal(
+      verifyExpectedArtifact("complete-slice", "M001/S01", base),
+      true,
+      "DB completion plus SUMMARY/UAT should prevent a retry even when ROADMAP is a stale projection",
+    );
+  } finally {
+    closeDatabase();
+    cleanup(base);
+  }
+});
+
 // ─── verifyExpectedArtifact: plan-slice empty scaffold regression (#699) ──
 
 test("verifyExpectedArtifact rejects plan-slice with empty scaffold", () => {

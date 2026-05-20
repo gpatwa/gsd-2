@@ -48,7 +48,8 @@ import { WorktreeStateProjection } from "./worktree-state-projection.js";
 import { createWorkspace, scopeMilestone } from "./workspace.js";
 import { normalizeWorktreePathForCompare } from "./worktree-root.js";
 import { isDbAvailable, getDbPath, refreshOpenDatabaseFromDisk, getTask, getSlice, getMilestone, getMilestoneSlices, updateTaskStatus, _getAdapter, getVerificationEvidence } from "./gsd-db.js";
-import { renderPlanCheckboxes } from "./markdown-renderer.js";
+import { renderPlanCheckboxes, renderRoadmapFromDb } from "./markdown-renderer.js";
+import { parseRoadmap as parseLegacyRoadmap } from "./parsers-legacy.js";
 import { consumeSignal } from "./session-status-io.js";
 import {
   checkPostUnitHooks,
@@ -86,6 +87,7 @@ import { validateArtifact } from "./schemas/validate.js";
 import { verificationRetryKey } from "./auto/verification-retry-policy.js";
 import { getLedger } from "./metrics.js";
 import { getUnitCostSpikeAction } from "./auto-budget.js";
+import { resolveCanonicalMilestoneRoot } from "./worktree-manager.js";
 
 // ─── Path Comparison Helper ───────────────────────────────────────────────
 /** Compare two paths for physical identity, tolerating trailing slashes and symlinks. */
@@ -642,6 +644,45 @@ function describeArtifactVerificationFailure(unitType: string, unitId: string, b
 
   const expected = diagnoseExpectedArtifact(unitType, unitId, basePath);
   return `Artifact verification failed: ${relPath} exists but did not satisfy the ${unitType} completion contract${expected ? ` (${expected})` : ""}.`;
+}
+
+async function repairCompleteSliceRoadmapProjection(
+  unitType: string,
+  unitId: string,
+  basePath: string,
+): Promise<boolean> {
+  if (unitType !== "complete-slice") return false;
+
+  const { milestone: mid, slice: sid } = parseUnitId(unitId);
+  if (!mid || !sid) return false;
+
+  const slice = getSlice(mid, sid);
+  if (!slice || !isClosedStatus(slice.status)) return false;
+
+  const artifactBase = resolveCanonicalMilestoneRoot(basePath, mid);
+  const summaryPath = resolveExpectedArtifactPath(unitType, unitId, artifactBase);
+  const uatPath = resolveSliceFile(artifactBase, mid, sid, "UAT");
+  if (!summaryPath || !existsSync(summaryPath) || !uatPath || !existsSync(uatPath)) {
+    return false;
+  }
+
+  const roadmapPath = resolveMilestoneFile(artifactBase, mid, "ROADMAP");
+  if (roadmapPath && existsSync(roadmapPath)) {
+    try {
+      const roadmap = parseLegacyRoadmap(readFileSync(roadmapPath, "utf-8"));
+      if (roadmap.slices.find((roadmapSlice) => roadmapSlice.id === sid)?.done) {
+        return false;
+      }
+    } catch (err) {
+      logWarning(
+        "projection",
+        `complete-slice roadmap parse failed before repair for ${mid}/${sid}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  await renderRoadmapFromDb(artifactBase, mid);
+  return true;
 }
 
 export async function autoCommitUnit(
@@ -1263,6 +1304,27 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
         }
       } catch (e) {
         debugLog("postUnit", { phase: "artifact-verify", error: String(e) });
+      }
+
+      try {
+        const repairedRoadmapProjection = await repairCompleteSliceRoadmapProjection(
+          s.currentUnit.type,
+          s.currentUnit.id,
+          s.basePath,
+        );
+        if (repairedRoadmapProjection) {
+          triggerArtifactVerified = verifyExpectedArtifact(s.currentUnit.type, s.currentUnit.id, s.basePath);
+          if (triggerArtifactVerified) {
+            invalidateAllCaches();
+          }
+          debugLog("postUnit", {
+            phase: "complete-slice-roadmap-projection-repaired",
+            unitType: s.currentUnit.type,
+            unitId: s.currentUnit.id,
+          });
+        }
+      } catch (e) {
+        debugLog("postUnit", { phase: "complete-slice-roadmap-projection-repair", error: String(e) });
       }
 
       // If verification failed, attempt to regenerate missing projection files

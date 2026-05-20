@@ -286,6 +286,41 @@ test("postUnitPreVerification continues closeout when artifact cost spike is obs
   }
 });
 
+test("postUnitPreVerification repairs stale complete-slice roadmap projection without retry", async () => {
+  const base = mkdtempSync(join(tmpdir(), "gsd-post-unit-slice-roadmap-"));
+  const notifications: string[] = [];
+  const pauseCalls = { count: 0 };
+  try {
+    writeProjectPreferences(base);
+    writeSliceFixture(base, { sliceDone: false });
+    writeFileSync(
+      join(base, ".gsd", "milestones", "M001", "slices", "S01", "S01-UAT.md"),
+      "# S01 UAT\n\nPassed.\n",
+      "utf-8",
+    );
+    openPostUnitDb(base, { sliceStatus: "complete" });
+
+    const s = makeCompleteSliceSession(base);
+    const result = await postUnitPreVerification(
+      makePostUnitContext(s, notifications, pauseCalls),
+      { skipSettleDelay: true, skipWorktreeSync: true },
+    );
+
+    assert.equal(result, "continue");
+    assert.equal(pauseCalls.count, 0);
+    assert.equal(s.pendingVerificationRetry, null);
+    assert.match(
+      readFileSync(join(base, ".gsd", "milestones", "M001", "M001-ROADMAP.md"), "utf-8"),
+      /- \[x\] \*\*S01:/,
+      "complete-slice closeout should repair ROADMAP from DB instead of retrying the closer",
+    );
+  } finally {
+    invalidateStateCache();
+    closeDatabase();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("postUnitPreVerification accepts validation invalidated by same-turn reassessment", async () => {
   const base = mkdtempSync(join(tmpdir(), "gsd-post-unit-validation-reassess-"));
   const notifications: string[] = [];
