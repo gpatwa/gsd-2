@@ -48,7 +48,6 @@ describe("db-task-slice-rows", () => {
       replan_triggered_at: null,
       is_sketch: 0,
       sketch_scope: "",
-      target_repositories: [],
     });
   });
 
