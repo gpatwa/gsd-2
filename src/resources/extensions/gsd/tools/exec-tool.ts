@@ -85,7 +85,10 @@ function escapeRegExp(value: string): string {
 }
 
 function normalizeScanPath(value: string): string {
-  return value.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+  return normalized.startsWith("/private/var/")
+    ? normalized.slice("/private".length)
+    : normalized;
 }
 
 function parseWorktreeBase(baseDir: string): { originalRoot: string; worktreeRoot: string } | null {
