@@ -19,6 +19,7 @@ test("getAutoRuntimeSnapshot includes orchestration phase when available", () =>
     async advance() { return { kind: "stopped" as const, reason: "test" }; },
     async completeActiveUnit() {},
     async retryActiveUnit() {},
+    clearLastAdvance() {},
     async resume() { return { kind: "stopped" as const, reason: "test" }; },
     async stop() { return { kind: "stopped" as const, reason: "test" }; },
     getStatus() {

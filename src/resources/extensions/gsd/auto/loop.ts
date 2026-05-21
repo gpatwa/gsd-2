@@ -1249,6 +1249,11 @@ export async function autoLoop(
         unitType: iterData.unitType,
         unitId: iterData.unitId,
       });
+      // Reset the stale-finalize guard so the same unit can be picked again
+      // on the next iteration without triggering an orchestrator-terminal stop.
+      // The stuck-loop detector (dispatchKeyWindow) is the backstop for genuine
+      // infinite loops. Fixes the no-artifact retry deadlock (#6328).
+      s.orchestration?.clearLastAdvance();
       completeIteration();
       stuckStatePersistedThisIteration = true;
       finishTurn("completed");

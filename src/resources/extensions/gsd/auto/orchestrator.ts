@@ -387,6 +387,10 @@ export class AutoOrchestrator implements AutoOrchestrationModule {
     });
   }
 
+  public clearLastAdvance(): void {
+    this.lastFinalizedUnitKey = null;
+  }
+
   public async retryActiveUnit(unit: { unitType: string; unitId: string }): Promise<void> {
     const unitKey = `${unit.unitType}:${unit.unitId}`;
     const activeUnitKey = this.status.activeUnit

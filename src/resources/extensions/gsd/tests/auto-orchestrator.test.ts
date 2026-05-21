@@ -555,6 +555,26 @@ test("completeActiveUnit allows a different next unit to advance", async () => {
   assert.deepEqual(second.unit, { unitType: "execute-task", unitId: "T02" });
 });
 
+test("clearLastAdvance() allows the same unit to be re-picked after completeActiveUnit", async () => {
+  const { deps, calls } = makeDeps();
+  const orchestrator = createAutoOrchestrator(deps);
+
+  const first = await orchestrator.advance();
+  assert.equal(first.kind, "advanced");
+  if (first.kind !== "advanced") throw new Error("expected first advance");
+
+  await orchestrator.completeActiveUnit(first.unit);
+  // Without clearLastAdvance, the next advance would stop with "state did not advance after finalized".
+  orchestrator.clearLastAdvance();
+  const second = await orchestrator.advance();
+
+  assert.equal(second.kind, "advanced");
+  if (second.kind !== "advanced") throw new Error("expected second advance after clearLastAdvance");
+  assert.deepEqual(second.unit, first.unit);
+  const prepareCalls = calls.filter((c) => c === "worktree.prepare").length;
+  assert.equal(prepareCalls, 2, "cleared guard allows same unit to be re-dispatched");
+});
+
 test("retryActiveUnit clears in-flight idempotency without marking the unit finalized", async () => {
   const { deps, calls } = makeDeps();
   const orchestrator = createAutoOrchestrator(deps);
