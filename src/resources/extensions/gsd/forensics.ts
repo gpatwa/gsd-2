@@ -258,11 +258,13 @@ export async function handleForensics(
   });
 
   ctx.ui.notify(`Forensic report saved: ${relative(basePath, savedPath)}`, "info");
+  ctx.ui.setStatus("gsd-forensics", "running");
 
   pi.sendMessage(
     { customType: "gsd-forensics", content, display: false },
     { triggerTurn: true },
   );
+  ctx.ui.setStatus("gsd-forensics", undefined);
 
   // Persist forensics context so follow-up turns can re-inject it (#2941)
   writeForensicsMarker(basePath, savedPath, content);
@@ -718,8 +720,10 @@ export function detectStuckLoops(units: UnitMetrics[], anomalies: ForensicAnomal
     const count = hasSessionAwareData
       ? Math.max(...Array.from(sessionBuckets.values(), (starts) => starts.size))
       : (sessionBuckets.get("__legacy__")?.size ?? 0);
+    const isParallelResearchSentinel = key.endsWith("/parallel-research");
+    const dispatchThreshold = isParallelResearchSentinel ? 2 : 1;
 
-    if (count > 1) {
+    if (count > dispatchThreshold) {
       const [unitType, ...idParts] = key.split("/");
       anomalies.push({
         type: "stuck-loop",

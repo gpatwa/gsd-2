@@ -13,6 +13,7 @@ import {
   _buildSliceWorkerEnvForTest,
   _resolveSliceParallelMaxWorkersForTest,
   getSliceOrchestratorState,
+  isSliceParallelActive,
   restoreSliceState,
   resetSliceOrchestrator,
   SLICE_WORKER_AUTO_ARGS,
@@ -180,6 +181,30 @@ describe("slice-parallel stale worktree handling", () => {
       rmSync(basePath, { recursive: true, force: true });
     }
   });
+
+  it("returns no started workers when process exits during startup gate", async () => {
+    const basePath = makeTempProject();
+    const oldGsdBinPath = process.env.GSD_BIN_PATH;
+    try {
+      initGitProject(basePath);
+      const workerBin = join(basePath, "exit-fast-worker.js");
+      writeFileSync(workerBin, "process.exit(1);\n", "utf-8");
+      process.env.GSD_BIN_PATH = workerBin;
+
+      const result = await startSliceParallel(basePath, "M902", [{ id: "S01" }], { maxWorkers: 1 });
+      assert.deepEqual(result.started, []);
+      assert.equal(result.errors.length, 1);
+      assert.equal(result.errors[0]?.sid, "S01");
+      assert.equal(result.errors[0]?.error, "Worker failed startup gate");
+      assert.equal(getSliceOrchestratorState()?.active, false);
+    } finally {
+      stopSliceParallel();
+      resetSliceOrchestrator();
+      if (oldGsdBinPath === undefined) delete process.env.GSD_BIN_PATH;
+      else process.env.GSD_BIN_PATH = oldGsdBinPath;
+      rmSync(basePath, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("slice-parallel-orchestrator recovery identity", () => {
@@ -233,6 +258,45 @@ describe("slice-parallel-orchestrator recovery identity", () => {
       assert.equal(restored.workers[0].pid, child.pid);
     } finally {
       child.kill("SIGTERM");
+      rmSync(basePath, { recursive: true, force: true });
+    }
+  });
+
+  it("treats persisted non-running workers as inactive and clears stale state file", () => {
+    const basePath = makeTempProject();
+    try {
+      writeFileSync(
+        join(basePath, ".gsd", "slice-orchestrator.json"),
+        JSON.stringify({
+          active: true,
+          workers: [{
+            milestoneId: "M900",
+            sliceId: "S01",
+            pid: 0,
+            workerToken: "done-worker",
+            processStartFingerprint: null,
+            worktreePath: join(basePath, ".gsd", "worktrees", "M900-S01"),
+            startedAt: Date.now(),
+            state: "stopped",
+            completedUnits: 1,
+            cost: 0,
+          }],
+          totalCost: 0,
+          maxWorkers: 1,
+          startedAt: Date.now(),
+          basePath,
+        }),
+        "utf-8",
+      );
+
+      assert.equal(isSliceParallelActive(basePath), false);
+      assert.equal(
+        existsSync(join(basePath, ".gsd", "slice-orchestrator.json")),
+        false,
+        "stale non-running persisted state should be removed",
+      );
+    } finally {
+      resetSliceOrchestrator();
       rmSync(basePath, { recursive: true, force: true });
     }
   });

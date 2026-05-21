@@ -110,8 +110,10 @@ test("Context Mode: every manifest declares the expected contextMode lane", () =
     "reassess-roadmap": "planning",
     "execute-task": "execution",
     "reactive-execute": "execution",
+    "quick-task": "execution",
     "run-uat": "verification",
     "gate-evaluate": "verification",
+    "triage-captures": "triage",
     "validate-milestone": "verification",
     "complete-slice": "verification",
     "complete-milestone": "verification",
@@ -175,6 +177,28 @@ test("#4782 phase 1: complete-milestone manifest declares slice-summary as excer
   );
 });
 
+test("closeout manifests keep broad narrative docs on-demand in standard mode", () => {
+  for (const unitType of ["validate-milestone", "complete-milestone"] as const) {
+    const m = UNIT_MANIFESTS[unitType];
+    assert.ok(
+      m.artifacts.onDemand.includes("project"),
+      `${unitType} should keep project narrative on-demand`,
+    );
+    assert.ok(
+      m.artifacts.onDemand.includes("milestone-context"),
+      `${unitType} should keep milestone context on-demand`,
+    );
+    assert.ok(
+      !m.artifacts.inline.includes("project"),
+      `${unitType} should not inline project narrative by default`,
+    );
+    assert.ok(
+      !m.artifacts.inline.includes("milestone-context"),
+      `${unitType} should not inline milestone context by default`,
+    );
+  }
+});
+
 // ─── v2 contract invariants (#4924) ──────────────────────────────────────
 
 test("#4924: computed + prepend ids (when declared) are non-empty strings", () => {
@@ -230,10 +254,11 @@ test("#4934: tools.mode is one of the declared policies", () => {
   }
 });
 
-test('#4934: only execution units and closeout units may use tools.mode "all"', () => {
+test('#4934: only execution units, quick-task, and closeout units may use tools.mode "all"', () => {
   const allowedAllUnits = new Set([
     "execute-task",
     "reactive-execute",
+    "quick-task",
     "validate-milestone",
     "complete-milestone",
     "complete-slice",
@@ -244,7 +269,7 @@ test('#4934: only execution units and closeout units may use tools.mode "all"', 
       assert.ok(
         allowedAllUnits.has(unitType),
         `manifest "${unitType}" declares tools.mode = "all" but is not explicitly allowed. ` +
-        'Only execute-task/reactive-execute and closeout units should have full source write access; ' +
+        'Only execute-task/reactive-execute, quick-task, and closeout units should have full source write access; ' +
         'planning/discuss/research units must use "planning" or "planning-dispatch" (or "docs" for rewrite-docs).',
       );
     }

@@ -23,7 +23,7 @@ import {
   type PreMergeCheckResult,
   type TaskCommitContext,
 } from "../../git-service.ts";
-import { nativeAddAllWithExclusions } from "../../native-git-bridge.ts";
+import { nativeAddAllWithExclusions, nativeHasChanges, _resetHasChangesCache } from "../../native-git-bridge.ts";
 function run(command: string, cwd: string): string {
   return execSync(command, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf-8" }).trim();
 }
@@ -245,6 +245,27 @@ describe('git-service', async () => {
     assert.ok(subject.includes("Added auth BREAKING: injected trailer"), "control characters are flattened");
     assert.equal(subject.includes("\r"), false, "subject does not include carriage returns");
     assert.equal(subject.includes("\u0007"), false, "subject does not include control characters");
+  });
+
+  test('buildTaskCommitMessage truncates long ASCII subject to <=72 UTF-8 bytes', () => {
+    const msg = buildTaskCommitMessage({
+      taskId: "S01/T05",
+      taskTitle: "implement lint metadata",
+      oneLiner: "Added the core lint contract, seven-rule metadata catalogue, and parse-derived mechanical lint mappings with structured suggested_fix objects.",
+    });
+    const subject = msg.split("\n")[0] ?? "";
+    assert.ok(Buffer.byteLength(subject, "utf8") <= 72, "subject is capped at 72 UTF-8 bytes");
+  });
+
+  test('buildTaskCommitMessage truncates multibyte subject without breaking UTF-8 boundaries', () => {
+    const msg = buildTaskCommitMessage({
+      taskId: "S01/T06",
+      taskTitle: "implement emoji handling",
+      oneLiner: "Added emoji support 😀😀😀😀😀😀😀😀😀😀 with robust UTF-8 truncation guards for commit subject generation across locales.",
+    });
+    const subject = msg.split("\n")[0] ?? "";
+    assert.ok(Buffer.byteLength(subject, "utf8") <= 72, "multibyte subject is capped at 72 UTF-8 bytes");
+    assert.ok(subject.endsWith("..."), "truncated subject uses ASCII ellipsis");
   });
 
   {
@@ -791,6 +812,33 @@ describe('git-service', async () => {
     assert.ok(
       committed.includes("src/actually-changed.ts"),
       "smartStage fallback stages real dirty files when scoped staging finds nothing",
+    );
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  // Regression: #5529. Some executors emit keyFiles relative to a monorepo
+  // subproject root (e.g. `src/...`) instead of the repo root
+  // (`frontend/src/...`). When none of those keyFiles exist at repo root,
+  // scoped staging must fall back to smartStage instead of failing the turn.
+  test('GitServiceImpl: repo-relative keyFiles mismatch falls back to smartStage', () => {
+    const repo = initTempRepo();
+    const svc = new GitServiceImpl(repo);
+
+    createFile(repo, "frontend/src/lib/onboarding-contract.ts", "export const contract = true;");
+
+    const msg = svc.autoCommit("execute-task", "M001/S01/T04", [], {
+      taskId: "S01/T04",
+      taskTitle: "fix scoped keyFiles path handling",
+      oneLiner: "Handled repo-relative keyFiles mismatch",
+      keyFiles: ["src/lib/onboarding-contract.ts"],
+    });
+    assert.ok(msg !== null, "autoCommit falls back to smartStage when scoped keyFiles are invalid at repo root");
+
+    const committed = run("git show --name-only --format= HEAD", repo);
+    assert.ok(
+      committed.includes("frontend/src/lib/onboarding-contract.ts"),
+      "smartStage fallback stages real dirty files when keyFiles are scoped to a subproject root",
     );
 
     rmSync(repo, { recursive: true, force: true });
@@ -1947,6 +1995,19 @@ describe('git-service', async () => {
     // No gsd snapshot commits in log
     const log = run("git log --oneline", repo);
     assert.ok(!log.includes("gsd snapshot"), "no gsd snapshot commits remain in history");
+
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  test('autoCommit: resets nativeHasChanges cache after successful commit', () => {
+    const repo = initTempRepo();
+    createFile(repo, "cache-reset.ts", "before");
+
+    _resetHasChangesCache();
+    const svc = new GitServiceImpl(repo);
+    const message = svc.autoCommit("execute-task", "S01/T-cache");
+    assert.ok(message !== null, "autoCommit should commit dirty changes");
+    assert.equal(nativeHasChanges(repo), false, "post-commit has-changes check should observe a clean tree");
 
     rmSync(repo, { recursive: true, force: true });
   });

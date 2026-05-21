@@ -163,14 +163,26 @@ export interface TaskCommitContext {
 export function buildTaskCommitMessage(ctx: TaskCommitContext): string {
   const description = sanitizeCommitSubjectDescription(ctx.oneLiner || ctx.taskTitle);
   const type = inferCommitType(ctx.taskTitle, ctx.oneLiner);
+  const subjectPrefix = `${type}: `;
+  const maxSubjectBytes = 72;
+  const ellipsis = "...";
+  const maxDescBytes = maxSubjectBytes - Buffer.byteLength(subjectPrefix, "utf8");
+  const maxTruncatedDescBytes = maxDescBytes - Buffer.byteLength(ellipsis, "utf8");
 
-  // Truncate description to ~72 chars for subject line (full budget without scope)
-  const maxDescLen = 70 - type.length;
-  const truncated = description.length > maxDescLen
-    ? description.slice(0, maxDescLen - 1).trimEnd() + "…"
-    : description;
+  let truncated = description;
+  if (Buffer.byteLength(description, "utf8") > maxDescBytes) {
+    let bytes = 0;
+    let cut = "";
+    for (const ch of description) {
+      const chBytes = Buffer.byteLength(ch, "utf8");
+      if (bytes + chBytes > maxTruncatedDescBytes) break;
+      cut += ch;
+      bytes += chBytes;
+    }
+    truncated = cut.trimEnd() + ellipsis;
+  }
 
-  const subject = `${type}: ${truncated}`;
+  const subject = `${subjectPrefix}${truncated}`;
 
   // Build body with key files if available
   const bodyParts: string[] = [];
@@ -457,6 +469,10 @@ export interface IntegrationBranchResolution {
   reason: string;
 }
 
+function normalizeLocalBranchRef(branch: string): string {
+  return branch.replace(/^refs\/heads\//, "");
+}
+
 /**
  * Resolve a milestone's recorded integration branch into an actionable status.
  *
@@ -480,7 +496,14 @@ export function resolveMilestoneIntegrationBranch(
     };
   }
 
-  if (nativeBranchExists(basePath, recordedBranch)) {
+  const normalizedRecordedBranch = normalizeLocalBranchRef(recordedBranch);
+  const isRecordedMilestoneBranch = normalizedRecordedBranch.startsWith("milestone/");
+  const recordedBranchUsable = !isRecordedMilestoneBranch;
+  const recordedBranchStateMessage = isRecordedMilestoneBranch
+    ? `Recorded integration branch "${recordedBranch}" for milestone ${milestoneId} is invalid (milestone branches cannot be merge targets)`
+    : `Recorded integration branch "${recordedBranch}" for milestone ${milestoneId} no longer exists`;
+
+  if (recordedBranchUsable && nativeBranchExists(basePath, recordedBranch)) {
     return {
       recordedBranch,
       effectiveBranch: recordedBranch,
@@ -499,7 +522,7 @@ export function resolveMilestoneIntegrationBranch(
         recordedBranch,
         effectiveBranch: configuredBranch,
         status: "fallback",
-        reason: `Recorded integration branch "${recordedBranch}" for milestone ${milestoneId} no longer exists; using configured git.main_branch "${configuredBranch}" instead.`,
+        reason: `${recordedBranchStateMessage}; using configured git.main_branch "${configuredBranch}" instead.`,
       };
     }
 
@@ -507,7 +530,7 @@ export function resolveMilestoneIntegrationBranch(
       recordedBranch,
       effectiveBranch: null,
       status: "missing",
-      reason: `Recorded integration branch "${recordedBranch}" for milestone ${milestoneId} no longer exists, and configured git.main_branch "${configuredBranch}" is unavailable.`,
+      reason: `${recordedBranchStateMessage}, and configured git.main_branch "${configuredBranch}" is unavailable.`,
     };
   }
 
@@ -518,7 +541,7 @@ export function resolveMilestoneIntegrationBranch(
         recordedBranch,
         effectiveBranch: detectedBranch,
         status: "fallback",
-        reason: `Recorded integration branch "${recordedBranch}" for milestone ${milestoneId} no longer exists; using detected fallback branch "${detectedBranch}" instead.`,
+        reason: `${recordedBranchStateMessage}; using detected fallback branch "${detectedBranch}" instead.`,
       };
     }
   } catch {
@@ -529,7 +552,7 @@ export function resolveMilestoneIntegrationBranch(
     recordedBranch,
     effectiveBranch: null,
     status: "missing",
-    reason: `Recorded integration branch "${recordedBranch}" for milestone ${milestoneId} no longer exists, and no safe fallback branch could be determined.`,
+    reason: `${recordedBranchStateMessage}, and no safe fallback branch could be determined.`,
   };
 }
 
@@ -924,6 +947,9 @@ export class GitServiceImpl {
       if (!nativeHasStagedChanges(this.basePath)) throw err;
       nativeCommit(this.basePath, message, { allowEmpty: false });
     }
+    // nativeHasChanges() uses a short TTL cache in fallback mode; invalidate it
+    // after a successful commit so post-commit checks observe a clean tree.
+    _resetHasChangesCache();
 
     // Absorb any preceding gsd snapshot commits into this real commit.
     // Walk backwards from HEAD~1 counting consecutive snapshot subjects,
@@ -1253,7 +1279,7 @@ function runPerRepositoryCommitAction(args: {
 } {
   const preferences = loadEffectiveGSDPreferences(args.basePath)?.preferences;
   const registry = createRepositoryRegistryFromPreferences(args.basePath, preferences);
-  const repoIds = args.targetRepositories ?? ["project"];
+  const repoIds = args.targetRepositories?.length ? args.targetRepositories : ["project"];
   const gitPrefs = preferences?.git ?? {};
   const commitMessages: Record<string, string> = {};
   const commitErrors: Record<string, string> = {};

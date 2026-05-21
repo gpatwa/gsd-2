@@ -47,19 +47,19 @@ test("command entrypoints use startAutoDetached instead of awaiting startAuto (#
   );
 });
 
-test("bare /gsd stays in the foreground smart-entry flow (#5125 regression)", () => {
+test("bare /gsd stays in the foreground home flow (#5125 regression)", () => {
   const autoHandlerSrc = readGsdFile("commands/handlers/auto.ts");
   const bareCommandBranch = autoHandlerSrc.slice(
     autoHandlerSrc.indexOf('if (trimmed === "")'),
   );
 
   assert.ok(
-    bareCommandBranch.includes('await import("../../guided-flow.js")'),
-    "bare /gsd should load the guided smart-entry flow",
+    bareCommandBranch.includes('await import("../../gsd-command-home.js")'),
+    "bare /gsd should load the state-aware home flow",
   );
   assert.ok(
-    bareCommandBranch.includes("await showSmartEntry(ctx, pi, projectRoot(), { step: true })"),
-    "bare /gsd should await the foreground wizard instead of detaching auto-mode",
+    bareCommandBranch.includes("await showGsdHome(ctx, pi, projectRoot())"),
+    "bare /gsd should await the foreground home menu instead of detaching auto-mode",
   );
   assert.ok(
     !bareCommandBranch.includes("startAutoDetached("),
@@ -105,6 +105,8 @@ test("auto bootstrap validates blocked directories before touching .gsd migratio
   const bootstrapIdx = autoStartSrc.indexOf("export async function bootstrapAutoSession(");
   const bootstrapBody = autoStartSrc.slice(bootstrapIdx);
   const bootstrapValidationIdx = bootstrapBody.indexOf("validateDirectory(base)");
+  const staleCrashReadIdx = bootstrapBody.indexOf("const startupLock = readCrashLock(base)");
+  const staleCrashClearIdx = bootstrapBody.indexOf("clearLock(base);");
   const lockIdx = bootstrapBody.indexOf("acquireSessionLock(base)");
   const bootstrapMigrationIdx = bootstrapBody.indexOf("migrateToExternalState(base)");
 
@@ -112,9 +114,15 @@ test("auto bootstrap validates blocked directories before touching .gsd migratio
   assert.ok(bootstrapValidationIdx > -1, "bootstrapAutoSession should validate the base directory");
   assert.ok(lockIdx > -1, "bootstrapAutoSession should acquire a session lock for safe projects");
   assert.ok(bootstrapMigrationIdx > -1, "bootstrapAutoSession should still migrate safe projects");
+  assert.ok(staleCrashReadIdx > -1, "bootstrapAutoSession should probe stale crash lock state before lock acquisition");
+  assert.ok(staleCrashClearIdx > -1, "bootstrapAutoSession should clear stale crash lock state when detected");
   assert.ok(
     bootstrapValidationIdx < lockIdx && bootstrapValidationIdx < bootstrapMigrationIdx,
     "fresh bootstrap must reject blocked directories before locking or migrating .gsd state",
+  );
+  assert.ok(
+    staleCrashReadIdx < lockIdx && staleCrashClearIdx < lockIdx,
+    "fresh bootstrap must auto-clear stale crash lock state before session lock acquisition",
   );
 });
 

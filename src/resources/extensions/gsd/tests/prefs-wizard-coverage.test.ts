@@ -25,7 +25,7 @@ const PREF_SAMPLE_VALUES: Record<string, unknown> = {
   unique_milestone_ids: true,
   budget_ceiling: 12.5,
   budget_enforcement: "warn",
-  context_pause_threshold: 0.8,
+  context_pause_threshold: 80,
   notifications: {
     enabled: true,
     on_complete: true,
@@ -58,6 +58,7 @@ const PREF_SAMPLE_VALUES: Record<string, unknown> = {
   verification_commands: ["npm test"],
   verification_auto_fix: true,
   verification_max_retries: 1,
+  per_unit_cost_cap_usd: 5,
   search_provider: "web",
   context_selection: "auto",
   widget_mode: "small",
@@ -187,7 +188,7 @@ test("models wizard offers discovered models for enabled providers", async () =>
     },
     ui: {
       notify() {},
-
+      select: async (label: string, options: string[]) => {
         const choice = choices.shift();
         if (!choice && label === "GSD Preferences") return "── Save & Exit ──";
         if (!choice && options.includes("(keep current)")) return "(keep current)";

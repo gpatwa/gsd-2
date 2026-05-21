@@ -25,7 +25,7 @@ import type { DynamicRoutingConfig, ModelCapabilities } from "./model-router.js"
 export interface ContextManagementConfig {
   observation_masking?: boolean;          // default: true
   observation_mask_turns?: number;        // default: 8, range: 1-50
-  compaction_threshold_percent?: number;  // default: 0.70, range: 0.5-0.95
+  compaction_threshold_percent?: number;  // default: 0.60, range: 0.5-0.95
   tool_result_max_chars?: number;         // default: 800, range: 200-10000
 }
 
@@ -124,6 +124,7 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "verification_commands",
   "verification_auto_fix",
   "verification_max_retries",
+  "per_unit_cost_cap_usd",
   "search_provider",
   "context_selection",
   "widget_mode",
@@ -333,6 +334,7 @@ export interface ClaudeCodeMcpConfig {
   per_model?: Record<string, ClaudeCodeMcpPerModelEntry>;
 }
 
+
 export interface WorkspaceRepositoryPreference {
   /** Child repository path; relative paths resolve from the project root. */
   path: string;
@@ -349,6 +351,7 @@ export interface WorkspacePreferences {
   mode?: "project" | "parent";
   repositories?: Record<string, WorkspaceRepositoryPreference>;
 }
+
 export interface GSDPreferences {
   version?: number;
   mode?: WorkflowMode;
@@ -410,6 +413,7 @@ export interface GSDPreferences {
   verification_commands?: string[];
   verification_auto_fix?: boolean;
   verification_max_retries?: number;
+  per_unit_cost_cap_usd?: number;
   /** Search provider preference. "brave"/"tavily"/"ollama" force that backend and disable native Anthropic search. "native" forces native only. "auto" = current default behavior. */
   search_provider?: "brave" | "tavily" | "ollama" | "native" | "auto";
   /** Context selection mode for file inlining. "full" inlines entire files, "smart" uses semantic chunking. Default derived from token profile. */

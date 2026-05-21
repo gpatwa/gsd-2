@@ -54,6 +54,29 @@ It checks:
 
 **Fix:** This was fixed in v2.14+. If you're on an older version, update. The dispatch prompt now includes explicit working directory instructions.
 
+### Milestone entry blocked by degraded worktree isolation
+
+**Symptoms:** Auto mode fails milestone entry with an isolation-degraded warning, often after a previous worktree cleanup/create problem on Windows.
+
+**Current behavior:** When isolation is configured as `worktree`, GSD now attempts a safe fallback to milestone `branch` mode instead of hard-failing immediately. Bootstrap also surfaces a specific isolation-degraded notification so the cause is visible.
+
+**Fix:**
+- Close editors, terminals, or antivirus tools that may be locking `.gsd/worktrees/*` paths.
+- Retry `/gsd auto`; if fallback succeeds, continue in branch mode for that milestone.
+- Run `/gsd doctor` after recovery to verify overall worktree health.
+
+### Windows `EPERM` / `EBUSY` while removing stale worktree directories
+
+**Symptoms:** Startup or milestone entry fails during stale worktree cleanup with `EPERM` or `EBUSY` from directory removal.
+
+**Cause:** A process still holds a handle under an old worktree path, preventing cleanup.
+
+**Current behavior:** GSD now fails with a targeted error explaining that file locks blocked cleanup and advising you to close locking tools before retrying.
+
+**Fix:**
+- Close apps that might hold file locks (editors, shells in old worktree paths, antivirus/indexers).
+- Retry the command after a short delay.
+
 ### `command not found: gsd` after install
 
 **Symptoms:** `npm install -g gsd-pi` succeeds but `gsd` isn't found.
@@ -135,6 +158,21 @@ If recovery still fails, repair runtime state instead of manually deleting indiv
 **Symptoms:** Worktree merge fails on `.gsd/` files.
 
 **Fix:** GSD auto-resolves conflicts on `.gsd/` runtime files. For content conflicts in code files, the LLM is given an opportunity to resolve them via a fix-merge session. If that fails, manual resolution is needed.
+
+### Auto mode stops before merge with preflight conflict/overlap errors
+
+**Symptoms:** Auto mode stops with a pre-merge reason like unresolved Git conflicts or dirty working tree overlap.
+
+**What it means:** Milestone merge preflight now fail-closes before merge when either:
+- the repo already has unresolved conflict stages (`git diff --name-only --diff-filter=U` is non-empty), or
+- local dirty files overlap files modified by the milestone branch.
+
+In these states GSD does not auto-stash and does not auto-fix; it stops so you can resolve safely.
+
+**Fix:**
+- Resolve conflict markers and stage the resolved files.
+- Commit, stash, or discard overlapping local edits outside GSD.
+- Re-run `/gsd auto` after `git status` is clean (or at least free of overlapping/conflicted paths).
 
 ### Pre-dispatch says the milestone integration branch no longer exists
 

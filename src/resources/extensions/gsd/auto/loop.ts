@@ -12,8 +12,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AutoSession } from "./session.js";
-import type { LoopDeps } from "./loop-deps.js";
+import type { LoopDeps, StopAutoOptions } from "./loop-deps.js";
+import type { GSDState } from "../types.js";
 import {
   MAX_LOOP_ITERATIONS,
   type LoopState,
@@ -26,6 +29,7 @@ import {
   runDispatch,
   runGuards,
   runFinalize,
+  STUCK_WINDOW_SIZE,
 } from "./phases.js";
 import { debugLog } from "../debug-logger.js";
 import { isInfrastructureError, isTransientCooldownError, getCooldownRetryAfterMs, COOLDOWN_FALLBACK_WAIT_MS, MAX_COOLDOWN_RETRIES } from "./infra-errors.js";
@@ -39,9 +43,10 @@ import {
   markFailed as markDispatchFailed,
   getRecentForUnit as getRecentDispatchesForUnit,
   getRecentUnitKeysForProjectRoot,
+  markLatestActiveForWorkerCanceled,
 } from "../db/unit-dispatches.js";
-import { claimMilestoneLease, refreshMilestoneLease } from "../db/milestone-leases.js";
-import { heartbeatAutoWorker } from "../db/auto-workers.js";
+import { claimMilestoneLease, refreshMilestoneLease, forceReleaseLeasesForWorker } from "../db/milestone-leases.js";
+import { heartbeatAutoWorker, getAutoWorker, markWorkerCrashed } from "../db/auto-workers.js";
 import { getRuntimeKv, setRuntimeKv } from "../db/runtime-kv.js";
 import { resolveUokFlags } from "../uok/flags.js";
 import { scheduleSidecarQueue } from "../uok/execution-graph.js";
@@ -80,6 +85,7 @@ import { createWorkflowTurnReporter } from "./workflow-turn-reporter.js";
 import { validateWorkflowSessionLock } from "./workflow-session-lock.js";
 import { dequeueSidecarItem } from "./workflow-sidecar-queue.js";
 import { maintainWorkerHeartbeat } from "./workflow-worker-heartbeat.js";
+import { gsdRoot } from "../paths.js";
 import {
   measureMemoryPressure,
   shouldCheckMemoryPressure,
@@ -99,6 +105,45 @@ import {
 } from "./workflow-custom-engine-verify-outcome.js";
 import { handleCustomEngineReconcile } from "./workflow-custom-engine-reconcile.js";
 import { handleCustomEngineReconcileOutcome } from "./workflow-custom-engine-reconcile-outcome.js";
+import { formatLeaseConflictNotice } from "./lease-conflict-notice.js";
+
+/**
+ * Returns true if workerId is an active worker in this project whose OS
+ * process no longer exists. Used to detect dead lease holders before
+ * the heartbeat TTL expires. EPERM means the process is alive (we lack
+ * permission to signal it); any other kill(pid,0) error means dead.
+ */
+function isDeadLocalLeaseHolder(workerId: string, projectRoot: string): boolean {
+  const worker = getAutoWorker(workerId);
+  if (!worker) return false;
+  if (worker.status !== "active") return false;
+  if (worker.project_root_realpath !== projectRoot) return false;
+  if (!Number.isInteger(worker.pid) || worker.pid <= 0) return true;
+  if (worker.pid === process.pid) return false;
+  try {
+    process.kill(worker.pid, 0);
+    return false;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code !== "EPERM";
+  }
+}
+
+function resolveCompletionStopFromState(
+  stateSnapshot: GSDState | undefined,
+): { reason: string; options: StopAutoOptions } | null {
+  if (stateSnapshot?.phase !== "complete") return null;
+  const completedMilestone = stateSnapshot.lastCompletedMilestone ?? stateSnapshot.activeMilestone;
+  return {
+    reason: "All milestones complete",
+    options: {
+      completionWidget: {
+        milestoneId: completedMilestone?.id ?? null,
+        milestoneTitle: completedMilestone?.title ?? null,
+        allMilestonesComplete: true,
+      },
+    },
+  };
+}
 
 // ── Stuck detection persistence (#3704) ──────────────────────────────────
 // Phase C migration: stuck-state.json deleted in favor of DB-backed
@@ -111,7 +156,6 @@ import { handleCustomEngineReconcileOutcome } from "./workflow-custom-engine-rec
 // helpers degrade to the empty-state fallback that #3704 already
 // tolerates — same behavior as a fresh session.
 const STUCK_RECOVERY_ATTEMPTS_KEY = "stuck_recovery_attempts";
-const RECENT_UNIT_KEYS_LIMIT = 20;
 
 function stableStuckStateScopeId(s: AutoSession): string {
   return normalizeRealPath(s.scope?.workspace.projectRoot ?? (s.originalBasePath || s.basePath));
@@ -121,7 +165,7 @@ function loadStuckState(s: AutoSession): { recentUnits: Array<{ key: string }>; 
   const scopeId = stableStuckStateScopeId(s);
   if (!scopeId) return { recentUnits: [], stuckRecoveryAttempts: 0 };
   try {
-    const recentUnits = getRecentUnitKeysForProjectRoot(scopeId, RECENT_UNIT_KEYS_LIMIT);
+    const recentUnits = getRecentUnitKeysForProjectRoot(scopeId, STUCK_WINDOW_SIZE);
     const stuckRecoveryAttempts =
       getRuntimeKv<number>("global", scopeId, STUCK_RECOVERY_ATTEMPTS_KEY) ?? 0;
     return { recentUnits, stuckRecoveryAttempts };
@@ -200,6 +244,18 @@ function logCustomVerifyRetryLoadFailure(err: unknown): void {
   });
 }
 
+function leaseConflictNotice(
+  iterData: IterationData,
+  reason: string,
+): string {
+  return formatLeaseConflictNotice({
+    milestoneId: iterData.mid,
+    unitType: iterData.unitType,
+    unitId: iterData.unitId,
+    reason,
+  });
+}
+
 function logCustomVerifyRetrySaveFailure(err: unknown): void {
   debugLog("autoLoop", {
     phase: "save-custom-verify-retries-failed",
@@ -216,6 +272,39 @@ const MAX_CUSTOM_ENGINE_VERIFY_RETRIES = 3;
 
 interface AutoLoopOptions {
   dispatchContract?: DispatchContract;
+}
+
+type CrashErrorType = "infrastructure" | "cooldown-exhausted" | "iteration-exhausted";
+
+function persistCrashNote(
+  s: AutoSession,
+  errorType: CrashErrorType,
+  errorMessage: string,
+  observedUnitType?: string,
+  observedUnitId?: string,
+): string | null {
+  try {
+    const activityDir = join(gsdRoot(s.basePath), "activity");
+    mkdirSync(activityDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `${timestamp}-auto-crash-note.json`;
+    const notePath = join(activityDir, filename);
+    const payload = {
+      kind: "auto_crash_note",
+      createdAt: new Date().toISOString(),
+      errorType,
+      errorMessage,
+      workerId: s.workerId ?? null,
+      milestoneId: s.currentMilestoneId ?? null,
+      unitType: observedUnitType ?? s.currentUnit?.type ?? null,
+      unitId: observedUnitId ?? s.currentUnit?.id ?? null,
+      sessionFile: s.pausedSessionFile ?? null,
+    };
+    writeFileSync(notePath, JSON.stringify(payload, null, 2), "utf-8");
+    return notePath;
+  } catch {
+    return null;
+  }
 }
 
 async function enforceMinRequestInterval(s: AutoSession, prefs: IterationContext["prefs"]): Promise<void> {
@@ -623,6 +712,17 @@ export async function autoLoop(
           finishTurn("stopped", "execution", "unit-break");
           break;
         }
+        if (unitPhaseResult.action === "retry") {
+          finishIncompleteIteration({
+            status: "retry",
+            reason: unitPhaseResult.reason,
+            retry: true,
+            unitType: iterData.unitType,
+            unitId: iterData.unitId,
+          });
+          finishTurn("retry", "execution", unitPhaseResult.reason);
+          continue;
+        }
 
         // ── Verify first, then reconcile (only mark complete on pass) ──
         debugLog("autoLoop", { phase: "custom-engine-verify", iteration, unitId: iterData.unitId });
@@ -738,7 +838,17 @@ export async function autoLoop(
       if (!sidecarItem) {
         const orchestration = s.orchestration;
         if (orchestration) {
-          const orchestrationResult = await orchestration.advance();
+          const existingPendingDispatch = s.pendingOrchestrationDispatch;
+          const orchestrationResult = existingPendingDispatch
+            ? {
+                kind: "advanced" as const,
+                unit: {
+                  unitType: existingPendingDispatch.unitType,
+                  unitId: existingPendingDispatch.unitId,
+                },
+                stateSnapshot: existingPendingDispatch.state,
+              }
+            : await orchestration.advance();
 
           if (orchestrationResult.kind === "blocked") {
             s.pendingOrchestrationDispatch = null;
@@ -756,7 +866,12 @@ export async function autoLoop(
 
           if (orchestrationResult.kind === "stopped") {
             s.pendingOrchestrationDispatch = null;
-            await deps.stopAuto(ctx, pi, orchestrationResult.reason);
+            const completionStop = resolveCompletionStopFromState(orchestrationResult.stateSnapshot);
+            if (completionStop) {
+              await deps.stopAuto(ctx, pi, completionStop.reason, completionStop.options);
+            } else {
+              await deps.stopAuto(ctx, pi, orchestrationResult.reason);
+            }
             finishTurn("stopped", "manual-attention", "orchestration-stopped");
             break;
           }
@@ -794,7 +909,13 @@ export async function autoLoop(
             break;
           }
           if (preDispatchResult.action === "continue") {
+            emitIterationEnd({ skipped: true });
+            completeIteration();
             finishTurn("skipped");
+            continue;
+          }
+          if (preDispatchResult.action === "retry") {
+            finishTurn("retry", "execution", preDispatchResult.reason);
             continue;
           }
           const preData = preDispatchResult.data;
@@ -811,7 +932,13 @@ export async function autoLoop(
             break;
           }
           if (dispatchResult.action === "continue") {
+            emitIterationEnd({ skipped: true });
+            completeIteration();
             finishTurn("skipped");
+            continue;
+          }
+          if (dispatchResult.action === "retry") {
+            finishTurn("retry", "execution", dispatchResult.reason);
             continue;
           }
           iterData = dispatchResult.data;
@@ -846,13 +973,35 @@ export async function autoLoop(
       // process has a worker identity, make the milestone lease explicit before
       // claiming so a step-mode handoff cannot leave us running with a stale
       // in-memory token and no backing lease row.
-      const leaseBeforeClaim = ensureDispatchLease(s, iterData.mid, {
+      let leaseBeforeClaim = ensureDispatchLease(s, iterData.mid, {
         claimMilestoneLease,
         logLeaseRecovered: logDispatchLeaseRecovered,
         logLeaseRecoveryFailed: logDispatchLeaseRecoveryFailed,
       });
+      if (leaseBeforeClaim.kind === "blocked" && leaseBeforeClaim.holderWorkerId) {
+        const holderWorkerId = leaseBeforeClaim.holderWorkerId;
+        if (isDeadLocalLeaseHolder(holderWorkerId, s.canonicalProjectRoot)) {
+          markLatestActiveForWorkerCanceled(holderWorkerId, "crash-recovered");
+          markWorkerCrashed(holderWorkerId);
+          forceReleaseLeasesForWorker(holderWorkerId);
+          const retryLease = ensureDispatchLease(s, iterData.mid, {
+            claimMilestoneLease,
+            logLeaseRecovered: logDispatchLeaseRecovered,
+            logLeaseRecoveryFailed: logDispatchLeaseRecoveryFailed,
+          }, { forceReclaim: true });
+          if (retryLease.kind === "ready") {
+            leaseBeforeClaim = retryLease;
+          } else {
+            const msg = leaseConflictNotice(iterData, retryLease.reason);
+            ctx.ui.notify(msg, "error");
+            finishTurn("stopped", "execution", msg);
+            await deps.stopAuto(ctx, pi, msg);
+            break;
+          }
+        }
+      }
       if (leaseBeforeClaim.kind === "blocked" || leaseBeforeClaim.kind === "failed") {
-        const msg = `Lost milestone lease for ${iterData.mid ?? "unknown"} before dispatching ${iterData.unitType} ${iterData.unitId}: ${leaseBeforeClaim.reason}`;
+        const msg = leaseConflictNotice(iterData, leaseBeforeClaim.reason);
         ctx.ui.notify(msg, "error");
         finishTurn("stopped", "execution", msg);
         await deps.stopAuto(ctx, pi, msg);
@@ -895,7 +1044,7 @@ export async function autoLoop(
                 : { kind: "degraded" },
           );
         } else {
-          const msg = `Lost milestone lease for ${iterData.mid ?? "unknown"} while claiming ${iterData.unitType} ${iterData.unitId}: ${leaseRecovery.reason}`;
+          const msg = leaseConflictNotice(iterData, leaseRecovery.reason);
           ctx.ui.notify(msg, "error");
           finishTurn("stopped", "execution", msg);
           await deps.stopAuto(ctx, pi, msg);
@@ -904,13 +1053,19 @@ export async function autoLoop(
       }
       if (dispatchDecision.action === "skip") {
         if (dispatchDecision.reason === "stale-lease") {
-          const msg = `Lost milestone lease for ${iterData.mid ?? "unknown"} while claiming ${iterData.unitType} ${iterData.unitId}; dispatch claim still failed after recovery.`;
+          const msg = leaseConflictNotice(iterData, "dispatch claim still failed after stale-lease recovery");
           ctx.ui.notify(msg, "error");
           finishTurn("stopped", "execution", msg);
           await deps.stopAuto(ctx, pi, msg);
           break;
         }
         finishTurn("skipped", "execution", dispatchDecision.reason);
+        finishIncompleteIteration({
+          status: "skipped",
+          reason: dispatchDecision.reason,
+          unitType: iterData.unitType,
+          unitId: iterData.unitId,
+        });
         continue;
       }
       dispatchId = dispatchDecision.dispatchId;
@@ -962,6 +1117,21 @@ export async function autoLoop(
         });
         finishTurn("stopped", "execution", "unit-break");
         break;
+      }
+      if (unitPhaseResult.action === "retry") {
+        dispatchSettled = settleDispatchFailed(dispatchId, unitPhaseResult.reason, {
+          markFailed: markDispatchFailed,
+          logWriteFailure: logDispatchLedgerWriteFailure,
+        }) || dispatchSettled;
+        finishIncompleteIteration({
+          status: "retry",
+          reason: unitPhaseResult.reason,
+          retry: true,
+          unitType: iterData.unitType,
+          unitId: iterData.unitId,
+        });
+        finishTurn("retry", "execution", unitPhaseResult.reason);
+        continue;
       }
 
       // ── Phase 5: Finalize ───────────────────────────────────────────────
@@ -1040,6 +1210,10 @@ export async function autoLoop(
           markFailed: markDispatchFailed,
           logWriteFailure: logDispatchLedgerWriteFailure,
         }) || dispatchSettled;
+        await s.orchestration?.retryActiveUnit({
+          unitType: iterData.unitType,
+          unitId: iterData.unitId,
+        });
         finishIncompleteIteration({
           status: "retry",
           reason: "finalize-retry",
@@ -1055,6 +1229,10 @@ export async function autoLoop(
         markCompleted: markDispatchCompleted,
         logWriteFailure: logDispatchLedgerWriteFailure,
       }) || dispatchSettled;
+      await s.orchestration?.completeActiveUnit({
+        unitType: iterData.unitType,
+        unitId: iterData.unitId,
+      });
       completeIteration();
       stuckStatePersistedThisIteration = true;
       finishTurn("completed");
@@ -1133,13 +1311,17 @@ export async function autoLoop(
           code: infraCode,
           errorMessage: msg,
         });
+        const crashNotePath = persistCrashNote(s, "infrastructure", msg, observedUnitType, observedUnitId);
         debugLog("autoLoop", {
           phase: "infrastructure-error",
           iteration,
           code: infraCode,
           error: msg,
         });
-        ctx.ui.notify(infraDecision.notifyMessage, "error");
+        ctx.ui.notify(
+          `${infraDecision.notifyMessage}${crashNotePath ? ` Crash note: ${crashNotePath}` : ""} Run /gsd auto to resume from the last checkpoint.`,
+          "error",
+        );
         await deps.stopAuto(ctx, pi, infraDecision.stopMessage);
         finishTurn(infraDecision.turnStatus, infraDecision.failureClass, msg);
         break;
@@ -1169,7 +1351,11 @@ export async function autoLoop(
         });
 
         if (cooldownDecision.action === "stop") {
-          ctx.ui.notify(cooldownDecision.notifyMessage, "error");
+          const crashNotePath = persistCrashNote(s, "cooldown-exhausted", msg, observedUnitType, observedUnitId);
+          ctx.ui.notify(
+            `${cooldownDecision.notifyMessage}${crashNotePath ? ` Crash note: ${crashNotePath}` : ""} Run /gsd auto to resume from the last checkpoint.`,
+            "error",
+          );
           finishTurn("stopped", "timeout", msg);
           await deps.stopAuto(ctx, pi, cooldownDecision.stopMessage);
           break;
@@ -1178,6 +1364,10 @@ export async function autoLoop(
         ctx.ui.notify(cooldownDecision.notifyMessage, "warning");
         await new Promise(resolve => setTimeout(resolve, cooldownDecision.waitMs));
         finishTurn("retry", "timeout", msg);
+        finishIncompleteIteration({
+          status: "retry",
+          reason: "cooldown-retry",
+        });
         continue; // Retry iteration without incrementing consecutiveErrors
       }
 
@@ -1196,7 +1386,11 @@ export async function autoLoop(
         currentErrorMessage: msg,
       });
       if (errorDecision.action === "stop") {
-        ctx.ui.notify(errorDecision.notifyMessage, "error");
+        const crashNotePath = persistCrashNote(s, "iteration-exhausted", msg, observedUnitType, observedUnitId);
+        ctx.ui.notify(
+          `${errorDecision.notifyMessage}${crashNotePath ? ` Crash note: ${crashNotePath}` : ""} Run /gsd auto to resume from the last checkpoint.`,
+          "error",
+        );
         await deps.stopAuto(ctx, pi, errorDecision.stopMessage);
         finishTurn(errorDecision.turnStatus, "execution", msg);
         break;

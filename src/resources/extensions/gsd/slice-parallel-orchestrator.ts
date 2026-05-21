@@ -30,7 +30,7 @@ import { isAbsolute, join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gsdRoot } from "./paths.js";
 import { createWorktree, worktreePath, removeWorktree } from "./worktree-manager.js";
-import { autoWorktreeBranch, runWorktreePostCreateHook } from "./auto-worktree.js";
+import { autoWorktreeBranch, runWorktreePostCreateHook, syncGsdStateToWorktree } from "./auto-worktree.js";
 import {
   writeSessionStatus,
   removeSessionStatus,
@@ -136,6 +136,39 @@ function isWorkerPidAlive(pid: number): boolean {
     if (code === "ESRCH") return false;
     return true;
   }
+}
+
+async function waitForStartupGrace(pid: number, graceMs: number): Promise<boolean> {
+  const end = Date.now() + graceMs;
+  while (Date.now() < end) {
+    if (!isWorkerPidAlive(pid)) return false;
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+  }
+  return isWorkerPidAlive(pid);
+}
+
+function createSliceWorktree(basePath: string, milestoneId: string, sliceId: string): string {
+  const wtBranch = `slice/${milestoneId}/${sliceId}`;
+  const wtName = `${milestoneId}-${sliceId}`;
+  const wtPath = worktreePath(basePath, wtName);
+
+  if (existsSync(wtPath) && !isValidSliceWorktreePath(basePath, wtPath)) {
+    rmSync(wtPath, { recursive: true, force: true });
+  }
+  if (!existsSync(wtPath)) {
+    createWorktree(basePath, wtName, { branch: wtBranch });
+  }
+
+  const hookError = runWorktreePostCreateHook(basePath, wtPath);
+  if (hookError) {
+    throw new Error(`slice worktree post-create hook failed (${wtName}): ${hookError}`);
+  }
+  syncGsdStateToWorktree(basePath, wtPath);
+
+  if (!existsSync(join(wtPath, ".gsd"))) {
+    throw new Error(`slice worktree preflight failed (${wtName}): missing .gsd in worktree`);
+  }
+  return wtPath;
 }
 
 interface PersistedSliceWorker {
@@ -367,7 +400,24 @@ export function restoreSliceState(basePath: string): PersistedSliceState | null 
  * crash followed by a fresh process is detectable. (Issue #4980 HIGH-8)
  */
 export function isSliceParallelActive(basePath?: string): boolean {
-  if (sliceState?.active === true) return true;
+  const hasRunningWorkers = (): boolean => {
+    if (!sliceState) return false;
+    for (const worker of sliceState.workers.values()) {
+      if (worker.state === "running") {
+        if (worker.process) return true;
+        if (isRecoveredSliceWorkerAlive(worker)) return true;
+      }
+    }
+    return false;
+  };
+
+  if (sliceState?.active === true) {
+    if (hasRunningWorkers()) return true;
+    sliceState.active = false;
+    removeSliceStateFile(sliceState.basePath);
+    return false;
+  }
+
   if (!basePath) return false;
   const restored = restoreSliceState(basePath);
   if (!restored || restored.workers.length === 0) return false;
@@ -398,7 +448,11 @@ export function isSliceParallelActive(basePath?: string): boolean {
       cost: w.cost,
     });
   }
-  return true;
+
+  if (hasRunningWorkers()) return true;
+  sliceState.active = false;
+  removeSliceStateFile(sliceState.basePath);
+  return false;
 }
 
 /**
@@ -455,17 +509,8 @@ export async function startSliceParallel(
 
   for (const slice of toSpawn) {
     try {
-      // Create worktree for this slice
-      const wtBranch = `slice/${milestoneId}/${slice.id}`;
       const wtName = `${milestoneId}-${slice.id}`;
-      const wtPath = worktreePath(basePath, wtName);
-
-      if (existsSync(wtPath) && !isValidSliceWorktreePath(basePath, wtPath)) {
-        rmSync(wtPath, { recursive: true, force: true });
-      }
-      if (!existsSync(wtPath)) {
-        createWorktree(basePath, wtName, { branch: wtBranch });
-      }
+      const wtPath = createSliceWorktree(basePath, milestoneId, slice.id);
 
       // Create worker info
       const worker: SliceWorkerInfo = {
@@ -486,10 +531,10 @@ export async function startSliceParallel(
 
       // Spawn worker
       const spawned = spawnSliceWorker(basePath, milestoneId, slice.id);
-      if (spawned) {
+      if (spawned && await waitForStartupGrace(worker.pid, 1200)) {
         started.push(slice.id);
       } else {
-        errors.push({ sid: slice.id, error: "Failed to spawn worker process" });
+        errors.push({ sid: slice.id, error: "Worker failed startup gate" });
         sliceState.workers.delete(slice.id);
         try {
           removeWorktree(basePath, wtName, { deleteBranch: true, force: true });
