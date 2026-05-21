@@ -936,6 +936,16 @@ export function clearArtifacts(): void {
   try { currentDb.exec("DELETE FROM artifacts"); } catch (e) { logWarning("db", `clearArtifacts failed: ${(e as Error).message}`); }
 }
 
+export function clearDecisions(): void {
+  if (!currentDb) return;
+  try { currentDb.exec("DELETE FROM decisions"); } catch (e) { logWarning("db", `clearDecisions failed: ${(e as Error).message}`); }
+}
+
+export function clearRequirements(): void {
+  if (!currentDb) return;
+  try { currentDb.exec("DELETE FROM requirements"); } catch (e) { logWarning("db", `clearRequirements failed: ${(e as Error).message}`); }
+}
+
 export function insertArtifact(a: {
   path: string;
   artifact_type: string;
