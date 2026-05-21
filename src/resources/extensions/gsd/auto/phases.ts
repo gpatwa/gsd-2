@@ -2523,11 +2523,11 @@ export async function runUnitPhase(
         lastProgressKind: "unit-aborted-pause",
       });
       ctx.ui.notify(
-        `Unit ${unitType} ${unitId} was aborted by the user. Pausing auto-mode (recoverable).`,
+        `Unit ${unitType} ${unitId} was aborted (transient). Pausing auto-mode (recoverable).`,
         "warning",
       );
       debugLog("autoLoop", { phase: "unit-aborted-transient-pause", unitType, unitId, category: errorCategory });
-      await deps.pauseAuto(ctx, pi);
+      await deps.pauseAuto(ctx, pi, unitResult.errorContext);
       await deps.autoCommitUnit?.(s.basePath, unitType, unitId, ctx);
       await emitCancelledUnitEnd(ic, unitType, unitId, unitStartSeq, unitResult.errorContext);
       return { action: "break", reason: "unit-aborted-pause" };
