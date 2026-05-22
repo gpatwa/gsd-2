@@ -10,3 +10,6 @@ https://github.com/open-gsd/gsd-pi
 
 Use the new repository for current source code, issues, releases, and contribution
 work.
+
+For community support, use the canonical Discord invite:
+https://discord.com/invite/nKXTsAcmbT
